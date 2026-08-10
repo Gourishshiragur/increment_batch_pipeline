@@ -1,0 +1,128 @@
+Enterprise Incremental Batch Pipeline Architecture
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                           Incremental Batch Data Pipeline – Enterprise Architecture                                                      │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+                                         Daily Snapshot CSV Files
+                                  snapshot_day0.csv, snapshot_day1.csv ...
+                                                    │
+                                                    ▼
+                         Unity Catalog Volume (Landing Storage)
+          /Volumes/workspace/default/incremental_batch/landing/snapshot_dayX.csv
+                                                    │
+                                                    ▼
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                       Enterprise Framework                                                                              │
+│                                                                                                                                        │
+│   Configuration        Audit Framework        Control Table        Pipeline Logger        Error Logger        Metrics Collector         │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                    │
+                                                    ▼
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                               Bronze Layer – Raw Data Ingestion                                                                         │
+│                                                                                                                                        │
+│ Notebook : 01_bronze_ingest.py                                                                                                          │
+│                                                                                                                                        │
+│ ✓ Read Snapshot CSV                                                                                                                     │
+│ ✓ Schema Validation                                                                                                                     │
+│ ✓ Metadata Columns (_ingestion_ts, _source_file)                                                                                        │
+│ ✓ Audit Logging                                                                                                                         │
+│ ✓ Delta Write                                                                                                                           │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                    │
+                                                    ▼
+                                   Delta Bronze Table
+                                    inc_batch_bronze
+                                                    │
+                                                    ▼
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                         Silver Layer – Incremental Processing & MERGE                                                                    │
+│                                                                                                                                        │
+│ Notebook : 02_silver_merge_upsert.py                                                                                                    │
+│                                                                                                                                        │
+│ ✓ Detect Changed Records                                                                                                                │
+│ ✓ Skip Unchanged Rows                                                                                                                   │
+│ ✓ Delta MERGE                                                                                                                           │
+│ ✓ Idempotent Processing                                                                                                                 │
+│ ✓ Replay Support                                                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                    │
+                                                    ▼
+                                    Delta Silver Table
+                                     inc_batch_silver
+                                                    │
+                                                    ▼
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                               Gold Layer – Business KPI Aggregation                                                                     │
+│                                                                                                                                        │
+│ Notebook : 03_gold_kpi_aggregation.py                                                                                                   │
+│                                                                                                                                        │
+│ ✓ Enterprise KPIs                                                                                                                       │
+│ ✓ Daily Trend Metrics                                                                                                                   │
+│ ✓ Throughput                                                                                                                            │
+│ ✓ Processing Reduction %                                                                                                                │
+│ ✓ Execution Statistics                                                                                                                  │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                    │
+                                                    ▼
+                           Gold Analytics Tables (Delta Lake)
+
+                  inc_batch_gold
+                  inc_batch_daily_trends
+                  inc_batch_enterprise_metrics
+                  inc_batch_realtime_performance
+                                                    │
+                                                    ▼
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                           Validation & Reconciliation Framework                                                                          │
+│                                                                                                                                        │
+│ Notebook : 04_validation.py                                                                                                             │
+│                                                                                                                                        │
+│ ✓ Snapshot Validation                                                                                                                   │
+│ ✓ Row Count Validation                                                                                                                  │
+│ ✓ Reconciliation                                                                                                                        │
+│ ✓ Audit Verification                                                                                                                    │
+│ ✓ Data Quality Checks                                                                                                                   │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                    │
+                                                    ▼
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                     Reporting & Analytics                                                                               │
+│                                                                                                                                        │
+│ • Executive KPI Dashboard                                                                                                               │
+│ • Analytics Dashboard                                                                                                                   │
+│ • Enterprise Metrics                                                                                                                    │
+│ • Performance Monitoring                                                                                                                │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+============================================================================================================
+                           Repository Components
+============================================================================================================
+
+ notebooks/        → Bronze • Silver • Gold • Validation • Lineage
+
+ src/
+      framework/   → Audit • Control • Logger • Metrics
+      pipeline/    → Pipeline Core Implementation
+
+ sql/              → Analytics & Validation Queries
+
+ docs/             → Documentation & Screenshots
+
+ benchmarks/       → Performance Results
+
+ config/           → Configuration
+
+ tests/            → Pipeline Validation
+
+
+
+============================================================================================================
+                                  Technology Stack
+============================================================================================================
+
+PySpark • Delta Lake • Unity Catalog • Delta MERGE • Databricks SQL
+Enterprise Audit Framework • Control Tables • Validation Framework
+Performance Monitoring • Incremental Batch Processing

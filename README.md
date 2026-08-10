@@ -43,6 +43,12 @@ Test data: synthetic mining telemetry, generated via `data/generate_snapshots.py
 **This table currently has one confirmed, validated data point (day 3), produced by running
 `notebooks/04_validation.py` end-to-end against the real Delta tables and cross-checked
 against the control, audit, and reconciliation tables** — not estimated, not simulated.
+
+### Day-over-Day Comparison
+
+![Day 0 vs Day 1 Processing](docs/images/day0_vs_day1_comparison.png)
+
+*Incremental processing efficiency: full snapshot vs. actual rows processed.*
 Days 0–2 and day 4 are pending re-validation against the current codebase; the numbers in
 this table will only ever be ones that have actually been produced by a real run and
 verified via `04_validation.py`'s `row_conservation_passed` check. Run the notebook
@@ -61,47 +67,122 @@ python3 data/generate_snapshots.py     # regenerate the daily CSVs
 
 ---
 
-## Pipeline architecture
+## Project Highlights
 
-```
-Daily snapshot extract (CSV, per customer account)
-        │
-        ▼
-[00 — Environment setup]   Creates the Unity Catalog Volume + folder structure (once)
-        │
-        ▼
-[01 — Bronze]   Raw append to Delta Bronze table
-                Schema enforcement, ingestion metadata (_ingestion_ts, _metadata.file_name)
-                Idempotent: re-running for an already-processed file is a no-op (SKIPPED)
-                snapshot_day="auto" discovers the next unprocessed file via the control table
-        │
-        ▼
-[02 — Silver]   Data quality gate (drop bad rows -> quarantine table, not silently discarded)
-                Change detection vs. prior Silver state:
-                  NEW       -> insert
-                  CHANGED   -> upsert (fuel_level / payload_weight_t / fault_code differ)
-                  UNCHANGED -> skip entirely
-                Delta MERGE upsert on reading_id
-                Reconciliation record written (row counts, reduction %, conservation check)
-        │
-        ▼
-[03 — Gold]     KPI aggregation per customer per machine per day
-                Delta MERGE upsert (idempotent re-runs, not blind overwrite)
-        │
-        ▼
-[04 — Validation]   Cross-checks every table exists, row counts are consistent,
-                     reconciliation's row-conservation check passed, every stage
-                     (bronze/silver/gold) actually succeeded for this file, quarantine
-                     count matches the reconciliation DQ-dropped count.
-                     Writes validation_report.json. A genuine FAIL is recorded as such
-                     in the control table (not silently marked SUCCESS), so a real
-                     problem forces a retry instead of being skipped forever.
-        │
-        ▼
-[05 — Lineage exploration]   Manual/on-demand only, not part of the automated job:
-                              row-count progression, dedup rate, Unity Catalog table
-                              metadata. Not gated by any pass/fail contract.
-```
+**Enterprise Data Engineering Pipeline** demonstrating production-grade incremental batch processing:
+
+* **PySpark** — distributed data processing with Delta Lake
+* **Delta Lake** — ACID transactions, time travel, and MERGE operations
+* **Unity Catalog** — centralized governance with managed tables and volumes
+* **Incremental Processing** — 93% reduction in data reprocessing through change detection
+* **Delta MERGE** — idempotent upserts for reliable incremental updates
+* **Bronze/Silver/Gold Architecture** — medallion lakehouse pattern
+* **Enterprise Audit Framework** — comprehensive logging and lineage tracking
+* **Control Tables** — pipeline orchestration and idempotency guarantees
+* **Validation & Reconciliation** — automated data quality checks and row conservation
+* **Databricks SQL Dashboards** — executive KPIs and analytics monitoring
+
+---
+
+## Architecture
+
+![Enterprise Pipeline Architecture](docs/images/architecture_diagram.png)
+
+*Enterprise incremental batch pipeline with Bronze/Silver/Gold medallion architecture, Unity Catalog governance, Delta MERGE processing, audit framework, and validation.*
+
+**Pipeline Flow:**
+
+1. **Landing Zone** — Daily CSV snapshots arrive in Unity Catalog Volume
+2. **Enterprise Framework** — Control tables, audit logging, metrics collection
+3. **Bronze Layer** — Raw ingestion with schema validation and metadata
+4. **Silver Layer** — Incremental MERGE with change detection (93% reduction)
+5. **Gold Layer** — Business KPIs and aggregated metrics
+6. **Validation** — Row conservation, reconciliation, and data quality checks
+7. **Dashboards** — Real-time monitoring and executive reporting
+
+---
+
+## Workspace Structure
+
+![Workspace Tree](docs/images/workspace_tree.png)
+
+*Project organization: notebooks, configuration, data generation scripts, and documentation.*
+
+---
+
+## Pipeline Stages
+
+### Bronze Layer — Raw Ingestion
+
+![Bronze Table Preview](docs/images/bronze_table_preview.png)
+
+*Raw telemetry data ingested with audit metadata including `_ingestion_ts`, `_source_file`, and `_snapshot_day`. Schema validation ensures data quality at entry point.*
+
+**Features:**
+* Schema enforcement on raw CSV data
+* Idempotent processing via control table
+* Automatic file discovery with `snapshot_day="auto"`
+* Audit columns added for lineage tracking
+
+---
+
+### Silver Layer — Incremental MERGE
+
+![Silver MERGE Output](docs/images/silver_merge_output.png)
+
+*Delta MERGE upsert with change classification: NEW (inserts), CHANGED (updates), UNCHANGED (skipped). Only changed rows are processed, achieving 93% reduction.*
+
+**Features:**
+* Hash-based change detection on business fields
+* Delta MERGE upsert on `reading_id`
+* Row classification: NEW, CHANGED, UNCHANGED
+* Quarantine table for data quality failures
+* Reconciliation records with row conservation checks
+
+---
+
+### Gold Layer — Business KPIs
+
+![Gold KPI Aggregation](docs/images/gold_kpi_output.png)
+
+*Aggregated business metrics per customer, machine, and day. Daily trends, enterprise KPIs, throughput analysis, and efficiency metrics.*
+
+**Features:**
+* Customer and machine-level aggregation
+* Daily trend analysis
+* Enterprise metrics and KPIs
+* Idempotent Delta MERGE (not blind overwrite)
+
+---
+
+### Validation & Reconciliation
+
+![Validation Report](docs/images/validation_passed.png)
+
+*Automated validation framework checking table existence, row conservation across layers, reconciliation consistency, and data quality gate compliance.*
+
+**Checks Performed:**
+* All required tables exist
+* Row counts consistent across Bronze → Silver → Gold
+* Reconciliation records match processed data
+* Quarantine table populated correctly
+* Control table status updated accurately
+
+---
+
+### Unity Catalog Tables
+
+![Unity Catalog Tables](docs/images/unity_catalog_tables.png)
+
+*Complete Unity Catalog schema showing all Delta tables: bronze, silver, gold, control, audit, reconciliation, daily trends, and enterprise metrics.*
+
+### Workspace Structure
+
+![Workspace Tree](docs/images/workspace_tree.png)
+
+### Unity Catalog Tables
+
+![Unity Catalog Tables](docs/images/unity_catalog_tables.png)
 
 **Idempotency mechanism:** every stage checks a shared control table
 (`pipeline_name` + `stage` + `source_file` + `status`) before running, and records its own
@@ -180,6 +261,27 @@ above) is the primary, actually-verified orchestration mechanism for this projec
 
 ---
 
+## Databricks SQL Dashboards
+
+Two production-grade Lakeview dashboards provide real-time monitoring and executive reporting.
+
+### Executive KPI Dashboard
+
+![Executive KPI Dashboard](docs/images/executive_kpi_dashboard.png)
+
+*Executive-level metrics: 93% data reduction rate, row conservation status, reconciliation summary, daily processing trends, and SLA tracking. Real-time visibility into pipeline health and efficiency.*
+
+---
+
+### Analytics Dashboard
+
+![Analytics Dashboard](docs/images/analytics_dashboard.png)
+
+*Operational analytics: change type distribution (NEW/CHANGED/UNCHANGED), execution time monitoring, throughput analysis, and performance trends over time.*
+
+---
+
+
 ## Design decisions worth discussing in an interview
 
 **Why comparison-based change detection rather than CDC?**
@@ -205,10 +307,20 @@ before ever running) — a real bug this project hit and fixed, not a hypothetic
 
 ---
 
-## Stack
+## Technology Stack
 
-Python · PySpark · Delta Lake · Databricks Free Edition · Unity Catalog (managed tables +
-Volumes) · pytest · GitHub Actions
+**Core Technologies:**
+* **Python** — Primary development language
+* **PySpark** — Distributed data processing engine
+* **Delta Lake** — ACID-compliant storage layer with MERGE operations
+* **Databricks** — Unified analytics platform (Free Edition compatible)
+* **Unity Catalog** — Centralized data governance (managed tables + volumes)
+
+**Development & CI/CD:**
+* **pytest** — Unit testing framework with pandas-mirror tests
+* **GitHub Actions** — Automated CI/CD pipeline
+* **black** — Code formatting (enforced)
+* **flake8** — Linting (informational)
 
 ---
 
