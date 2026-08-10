@@ -1,0 +1,20 @@
+{
+  "name": "AzureDatabricks_LinkedService",
+  "properties": {
+    "type": "AzureDatabricks",
+    "typeProperties": {
+      "domain": "https://<your-workspace>.azuredatabricks.net",
+      "accessToken": {
+        "type": "AzureKeyVaultSecret",
+        "store": {
+          "referenceName": "AzureKeyVault_LinkedService",
+          "type": "LinkedServiceReference"
+        },
+        "secretName": "databricks-pat-token"
+      },
+      "newClusterNodeType": null,
+      "existingClusterId": null,
+      "instancePoolId": null
+    }
+  }
+}

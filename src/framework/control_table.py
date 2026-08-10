@@ -10,6 +10,7 @@ Tracks pipeline execution metadata.
 """
 
 from __future__ import annotations
+import os
 from .control_schema import CONTROL_SCHEMA
 
 
@@ -39,16 +40,15 @@ class ControlTable:
 
     def __init__(
         self,
-        spark: SparkSession,
-        control_path: str,
-        is_databricks: bool = False,
+        spark,
+        control_path,
+        control_table=None,
+        is_databricks=("DATABRICKS_RUNTIME_VERSION" in os.environ),
     ):
-
         self.spark = spark
-
         self.control_path = control_path
+        self.control_table = control_table
         self.is_databricks = is_databricks
-
     def start_run(
         self,
         pipeline_name: str,
@@ -220,7 +220,7 @@ class ControlTable:
         )
 
         if self.is_databricks:
-            (df.write.mode("append").saveAsTable(self.control_path))
+            (df.write.mode("append").saveAsTable(self.control_table))
         else:
             (df.write.format("delta").mode("append").save(self.control_path))
 
@@ -281,13 +281,13 @@ class ControlTable:
         )
         if self.is_databricks:
 
-            if not self.spark.catalog.tableExists(self.control_path):
-                (df.write.mode("append").saveAsTable(self.control_path))
+            if not self.spark.catalog.tableExists(self.control_table):
+                (df.write.mode("append").saveAsTable(self.control_table))
                 return
 
             control_table = DeltaTable.forName(
                 self.spark,
-                self.control_path,
+                self.control_table,
             )
         else:
             if not DeltaTable.isDeltaTable(self.spark, self.control_path):
@@ -348,13 +348,13 @@ class ControlTable:
 
         if self.is_databricks:
 
-            if not self.spark.catalog.tableExists(self.control_path):
-                (df.write.mode("append").saveAsTable(self.control_path))
+            if not self.spark.catalog.tableExists(self.control_table):
+                (df.write.mode("append").saveAsTable(self.control_table))
                 return
 
             control_table = DeltaTable.forName(
                 self.spark,
-                self.control_path,
+                self.control_table,
             )
 
         else:
@@ -397,11 +397,11 @@ class ControlTable:
         """
         if self.is_databricks:
 
-            if not self.spark.catalog.tableExists(self.control_path):
+            if not self.spark.catalog.tableExists(self.control_table):
                 return None
 
             df = (
-                self.spark.table(self.control_path)
+                self.spark.table(self.control_table)
                 .filter(f"pipeline_name = '{pipeline_name}'")
                 .select("watermark")
                 .orderBy("updated_at", ascending=False)
@@ -446,11 +446,11 @@ class ControlTable:
 
         if self.is_databricks:
 
-            if not self.spark.catalog.tableExists(self.control_path):
+            if not self.spark.catalog.tableExists(self.control_table):
                 return None
 
             rows = (
-                self.spark.table(self.control_path)
+                self.spark.table(self.control_table)
                 .filter(f"pipeline_name = '{pipeline_name}'")
                 .filter(f"source_file = '{source_file}'")
                 .filter(f"stage = '{stage}'")
@@ -497,11 +497,11 @@ class ControlTable:
 
         if self.is_databricks:
 
-            if not self.spark.catalog.tableExists(self.control_path):
+            if not self.spark.catalog.tableExists(self.control_table):
                 return False
 
             df = (
-                self.spark.table(self.control_path)
+                self.spark.table(self.control_table)
                 .filter(f"pipeline_name = '{pipeline_name}'")
                 .filter(f"source_file = '{source_file}'")
                 .filter(f"stage = '{stage}'")

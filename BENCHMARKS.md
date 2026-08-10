@@ -1,38 +1,49 @@
 # Benchmarks — Incremental Batch Lakehouse Pipeline
 
-All numbers below were produced by actually running the pipeline logic against
-generated data, not estimated. See `validation/run_pipeline_validation.py` for
-the harness and `validation/measured_results.json` for raw output.
+All numbers below come from actually running `notebooks/04_validation.py` against real
+Delta/Unity Catalog tables produced by the pipeline, cross-checked against the control,
+audit, and reconciliation tables — not estimated, not simulated, not carried forward from
+an earlier version of the pipeline.
 
 ## Test data
-- 25 customers, 970 machines, ~349,200 new telemetry readings generated per day
-- 5 daily snapshot extracts simulating realistic re-pulled windows (85% of
-  prior rows carried forward, ~4% of those corrected/re-transmitted, 15% aged
-  out of the window, plus each day's new readings)
-- Peak single-run snapshot size: **1,295,055 rows**
+- Synthetic mining telemetry, generated via `data/generate_snapshots.py` — see
+  `DATA_UPLOAD_GUIDE.md` for why synthetic data is used and how to say so honestly if asked
+- 5 daily snapshot extracts simulating a realistic rolling re-pull window (prior rows
+  carried forward, a fraction corrected/re-transmitted, some aged out of the window, plus
+  each day's new readings)
 
-## Measured results (Day 1 → Day 4, Day 0 has no prior state to compare against)
+## Measured results
 
-| Day | Full snapshot rows (full-reload equivalent) | Rows actually processed (new + changed) | Unchanged rows skipped | Reprocessing reduction |
-|---|---|---|---|---|
-| 1 | 646,020 | 361,127 | 284,893 | 44.10% |
-| 2 | 898,317 | 371,099 | 527,218 | 58.69% |
-| 3 | 1,112,770 | 379,776 | 732,994 | 65.87% |
-| 4 | 1,295,055 | 386,965 | 908,090 | 70.12% |
+| Day | Full snapshot rows | Rows actually processed (new + changed) | Unchanged rows skipped | Reprocessing reduction | Row conservation | DQ dropped |
+|---|---|---|---|---|---|---|
+| 3 | 1,959,120 | 134,783 | 1,824,337 | **93.12%** | ✅ passed | 0 |
 
-**Average reprocessing reduction: 59.7%**
-**Average pipeline runtime per run: ~3 seconds** (pandas validation harness on generated data; run the Databricks notebooks for production-representative timing)
+**Only day 3 has been validated against the current codebase.** Days 0, 1, 2, and 4 need to
+be re-run and re-validated before adding them here — the pipeline's change-detection fields
+(`TRACKED_FIELDS`) changed during development (GPS/timestamp were removed from tracked
+fields; see README "Design decisions"), so any numbers produced before that fix are not
+representative of the current pipeline and should not be reused.
+
+**Do not fill in placeholder or estimated numbers for the missing days.** The entire point
+of this benchmark file is that every number in it is independently reproducible by re-running
+the notebooks and checking `reports/validation_report.json` — a plausible-looking guess
+defeats that purpose and would not hold up if someone actually asked to see the run that
+produced it.
 
 ## How to reproduce
-1. `python3 data/generate_snapshots.py` — regenerates the 5 daily snapshot CSVs
-2. `python3 validation/run_pipeline_validation.py` — runs Bronze→Silver→Gold
-   logic locally and writes `validation/measured_results.json`
-3. For the authoritative Spark/Delta run: import `notebooks/01_bronze_ingest.py`,
-   `02_silver_merge_upsert.py`, `03_gold_kpi_aggregation.py` into Databricks
-   Community Edition, upload the CSVs to DBFS, and run each notebook once per
-   `snapshot_day` widget value (0 through 4) in sequence.
+```bash
+python3 data/generate_snapshots.py   # regenerates the daily snapshot CSVs
+
+# Per day, in order (Databricks: set the snapshot_day widget; local: pass as argv[1]):
+#   01_bronze_ingest.py -> 02_silver_merge_upsert.py -> 03_gold_kpi_aggregation.py -> 04_validation.py
+
+# The authoritative output is reports/validation_report.json -- specifically:
+#   reduction_pct, row_conservation_passed, dq_dropped, status, errors
+```
 
 ## Note on the resume figure
-The resume currently states "cutting simulated reprocessing volume by ~40-50%".
-The measured average here (59.7%) is higher than that claim — the resume
-figure is conservative relative to what this run actually demonstrates.
+If your resume states a reprocessing-reduction percentage, it should be **at or below** the
+lowest *confirmed* number in this table, not an average of numbers you haven't actually
+reproduced. Right now that means: don't claim a specific percentage until at least 2–3 days
+are validated and the range is known — a single data point (93.12%) is a promising result,
+not yet a defensible claimed average.

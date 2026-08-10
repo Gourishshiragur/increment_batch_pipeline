@@ -6,6 +6,7 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 2
 
 import os
 import sys
@@ -111,6 +112,83 @@ else:
     shared_run_id = sys.argv[2] if len(sys.argv) > 2 else None
     shared_execution_id = sys.argv[3] if len(sys.argv) > 3 else None
 
+# ------------------------------------------------------------------
+# Auto-discovery: Find next unprocessed snapshot file
+# ------------------------------------------------------------------
+
+if snapshot_day == "auto":
+    import re
+    from pyspark.sql.functions import col
+    
+    landing_path = paths['landing']
+    
+    # List all snapshot files in landing folder
+    try:
+        if IS_DATABRICKS:
+            files = dbutils.fs.ls(landing_path)
+            snapshot_files = [f.name for f in files if re.match(r'snapshot_day\d+\.csv$', f.name)]
+        else:
+            landing_dir = Path(landing_path)
+            snapshot_files = [f.name for f in landing_dir.glob('snapshot_day*.csv')]
+        
+        if not snapshot_files:
+            print("No snapshot files found in landing folder. Exiting.")
+            if IS_DATABRICKS:
+                dbutils.notebook.exit("NO_FILES")
+            else:
+                sys.exit(0)
+        
+        # Extract day numbers and sort
+        day_numbers = []
+        for filename in snapshot_files:
+            match = re.match(r'snapshot_day(\d+)\.csv$', filename)
+            if match:
+                day_numbers.append(int(match.group(1)))
+        
+        day_numbers.sort()
+        
+        # Create minimal context just to check control table
+        temp_context = FrameworkContext(
+            spark=spark,
+            pipeline_name=pipeline_name,
+            pipeline_type=metadata["pipeline"]["type"],
+            control_path=paths["control"],
+            control_table=paths["control_table"],
+            quarantine_path=paths["quarantine"],
+            schema_history_path=paths["schema_history"],
+            schema_history_table=paths["schema_history_table"],
+            schema_changes_path=paths["schema_changes"],
+            schema_changes_table=paths["schema_changes_table"],
+            run_id=None,
+            execution_id=None,
+        )
+        
+        # Find first unprocessed file
+        unprocessed_day = None
+        for day in day_numbers:
+            source_filename = f"snapshot_day{day}.csv"
+            if not temp_context.control.already_processed(
+                pipeline_name,
+                source_filename,
+                stage="bronze",
+            ):
+                unprocessed_day = day
+                break
+        
+        if unprocessed_day is None:
+            print(f"All {len(day_numbers)} snapshot files already processed. Exiting.")
+            if IS_DATABRICKS:
+                dbutils.notebook.exit("ALL_PROCESSED")
+            else:
+                sys.exit(0)
+        
+        snapshot_day = str(unprocessed_day)
+        print(f"Auto-discovery: Found {len(day_numbers)} snapshot file(s). Processing snapshot_day={snapshot_day}")
+        
+    except Exception as e:
+        print(f"Auto-discovery failed: {e}")
+        raise
+
 
 context = FrameworkContext(
     spark=spark,
@@ -139,6 +217,13 @@ context.logger.pipeline_started()
 
 run_id = context.audit.start_run()
 
+# Define target paths BEFORE skip check so they're always available
+if IS_DATABRICKS:
+    BRONZE_TABLE = paths["bronze_table"]
+    AUDIT_TABLE = paths["audit_table"]
+else:
+    BRONZE_PATH = paths["bronze"]
+    AUDIT_PATH = paths["audit"]
 
 if context.control.already_processed(
     pipeline_name,
@@ -162,12 +247,6 @@ context.control.start_run(
     stage="bronze",
     source_file=SOURCE_FILE,
 )
-if IS_DATABRICKS:
-    BRONZE_TABLE = paths["bronze_table"]
-    AUDIT_TABLE = paths["audit_table"]
-else:
-    BRONZE_PATH = paths["bronze"]
-    AUDIT_PATH = paths["audit"]
 
 # COMMAND ----------
 

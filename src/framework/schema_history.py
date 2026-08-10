@@ -204,9 +204,6 @@ class SchemaHistory:
                     .limit(1)
                 )
 
-            if history_df.rdd.isEmpty():
-                return None
-
             row = history_df.first()
 
             if row is None:
@@ -259,9 +256,6 @@ class SchemaHistory:
                     .orderBy(col("version").desc())
                     .limit(1)
                 )
-
-            if history_df.rdd.isEmpty():
-                return None
 
             row = history_df.first()
 

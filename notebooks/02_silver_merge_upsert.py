@@ -9,6 +9,7 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Silver Setup
 import os
 import sys
 from pathlib import Path
@@ -96,6 +97,71 @@ else:
     snapshot_day = sys.argv[1] if len(sys.argv) > 1 else "0"
     shared_run_id = sys.argv[2] if len(sys.argv) > 2 else None
     shared_execution_id = sys.argv[3] if len(sys.argv) > 3 else None
+
+# ------------------------------------------------------------------
+# Auto-discovery: Find most recent successful bronze run
+# ------------------------------------------------------------------
+
+if snapshot_day == "auto":
+    import re
+    
+    # Create temporary context to query control table
+    temp_context = FrameworkContext(
+        spark=spark,
+        pipeline_name=pipeline_name,
+        pipeline_type=metadata.get("pipeline", {}).get("type", "batch"),
+        control_path=paths["control"],
+        control_table=paths["control_table"],
+        quarantine_path=paths["quarantine"],
+        schema_history_path=paths["schema_history"],
+        schema_history_table=paths["schema_history_table"],
+        schema_changes_path=paths["schema_changes"],
+        schema_changes_table=paths["schema_changes_table"],
+        run_id=None,
+        execution_id=None,
+    )
+    
+    # Query control table for most recent successful bronze run
+    control_table = paths["control_table"] if IS_DATABRICKS else paths["control"]
+    
+    try:
+        if IS_DATABRICKS:
+            recent_bronze = spark.sql(f"""
+                SELECT source_file
+                FROM {control_table}
+                WHERE pipeline_name = '{pipeline_name}'
+                  AND stage = 'bronze'
+                  AND status = 'SUCCESS'
+                ORDER BY updated_at DESC
+                LIMIT 1
+            """).collect()
+        else:
+            from delta.tables import DeltaTable
+            dt = DeltaTable.forPath(spark, control_table)
+            recent_bronze = dt.toDF().filter(
+                (F.col("pipeline_name") == pipeline_name) &
+                (F.col("stage") == "bronze") &
+                (F.col("status") == "SUCCESS")
+            ).orderBy(F.col("updated_at").desc()).limit(1).collect()
+        
+        if not recent_bronze:
+            print("No successful bronze runs found. Exiting.")
+            if IS_DATABRICKS:
+                dbutils.notebook.exit("NO_BRONZE_RUN")
+            else:
+                sys.exit(0)
+        
+        source_file = recent_bronze[0]["source_file"]
+        match = re.match(r'snapshot_day(\d+)\.csv$', source_file)
+        if match:
+            snapshot_day = match.group(1)
+            print(f"Auto-discovery: Using snapshot_day={snapshot_day} from most recent bronze run")
+        else:
+            raise ValueError(f"Could not parse snapshot_day from source_file: {source_file}")
+            
+    except Exception as e:
+        print(f"Auto-discovery failed: {e}")
+        raise
 
 pipeline_type = metadata.get("pipeline", {}).get("type", "batch")
 context = FrameworkContext(

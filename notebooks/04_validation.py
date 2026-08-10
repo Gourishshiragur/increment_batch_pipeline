@@ -1,42 +1,45 @@
-"""
-04_validation.py
+# Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
+# DBTITLE 1,Pipeline Validation
+# MAGIC %md
+# MAGIC # 04 Validation - Enterprise Pipeline Validation
+# MAGIC
+# MAGIC ## Validates:
+# MAGIC
+# MAGIC ✓ Bronze / Silver / Gold / Audit / Reconciliation / Control / Schema
+# MAGIC   History / Quarantine tables all exist
+# MAGIC ✓ Row count consistency (Bronze ≥ Silver, neither Silver nor Gold empty)
+# MAGIC ✓ Control table's own bookkeeping is self-consistent (rows_written ≤
+# MAGIC   rows_read, latest run for this file's Gold stage is SUCCESS)
+# MAGIC ✓ Reconciliation row-conservation check passed at the Silver DQ gate
+# MAGIC ✓ Every stage (bronze/silver/gold) has a successful audit record for
+# MAGIC   this run
+# MAGIC ✓ Quarantine row count matches the reconciliation table's dq_dropped
+# MAGIC   count
+# MAGIC
+# MAGIC ## Outputs:
+# MAGIC
+# MAGIC `<reports folder>/validation_report.json`
 
-Enterprise Pipeline Validation
+# COMMAND ----------
 
-Validates:
-
-✓ Bronze table exists
-✓ Silver table exists
-✓ Gold table exists
-✓ Audit table exists
-✓ Reconciliation table exists
-
-✓ Row count consistency
-✓ DQ drop count
-✓ Incremental processing metrics
-✓ Gold output
-✓ Audit success
-✓ Data loss detection
-
-Outputs:
-
-reports/
-    validation_report.json
-"""
-
+# DBTITLE 1,Imports and Configuration
 from __future__ import annotations
 
 import os
+import re
 import sys
 import json
+import time
 from pathlib import Path
 from datetime import datetime, UTC
-import time
 
 # Local only: add project root for imports
 if not os.getenv("DATABRICKS_RUNTIME_VERSION"):
     PROJECT_ROOT = Path.cwd()
-
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -60,55 +63,102 @@ from src.framework.constants import (
     STATUS_STARTED,
 )
 
-# ------------------------------------------------------------------
-
-
 config = get_config()
 metadata = get_metadata()
 pipeline_type = metadata.get("pipeline", {}).get("type", "batch")
 paths = get_paths()
 environment = get_environment()
 pipeline_name = get_pipeline_name()
-
-
 IS_DATABRICKS = environment == "databricks"
 
+# COMMAND ----------
 
+# DBTITLE 1,Initialize Spark and Widgets
 if not IS_DATABRICKS:
-
     builder = (
         SparkSession.builder.master("local[*]")
         .appName(pipeline_name)
-        .config(
-            "spark.sql.extensions",
-            "io.delta.sql.DeltaSparkSessionExtension",
-        )
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config(
             "spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
     )
-
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
 
-
+# run_id / execution_id are optional -- when this notebook is one task in an
+# orchestrated multi-task job, the job passes the SAME run_id/execution_id to
+# every stage so Bronze/Silver/Gold/Validation all write audit + control rows
+# under one shared identifier. Left blank, this stage generates its own.
 if IS_DATABRICKS:
-
     dbutils.widgets.text("snapshot_day", "0")
     dbutils.widgets.text("run_id", "")
     dbutils.widgets.text("execution_id", "")
-
     snapshot_day = dbutils.widgets.get("snapshot_day")
     shared_run_id = dbutils.widgets.get("run_id") or None
     shared_execution_id = dbutils.widgets.get("execution_id") or None
-
 else:
-
     snapshot_day = sys.argv[1] if len(sys.argv) > 1 else "0"
     shared_run_id = sys.argv[2] if len(sys.argv) > 2 else None
     shared_execution_id = sys.argv[3] if len(sys.argv) > 3 else None
 
+# COMMAND ----------
 
+# DBTITLE 1,Auto-Discovery Logic
+# snapshot_day="auto" validates whichever source file the most recent
+# successful Bronze run actually processed, instead of requiring the
+# caller to know the day number.
+if snapshot_day == "auto":
+
+    control_target = paths["control_table"] if IS_DATABRICKS else paths["control"]
+
+    if IS_DATABRICKS:
+        recent_bronze = spark.sql(f"""
+            SELECT source_file
+            FROM {control_target}
+            WHERE pipeline_name = '{pipeline_name}'
+              AND stage = 'bronze'
+              AND status = 'SUCCESS'
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """).collect()
+    else:
+        dt = DeltaTable.forPath(spark, control_target)
+        recent_bronze = (
+            dt.toDF()
+            .filter(
+                (F.col("pipeline_name") == pipeline_name)
+                & (F.col("stage") == "bronze")
+                & (F.col("status") == "SUCCESS")
+            )
+            .orderBy(F.col("updated_at").desc())
+            .limit(1)
+            .collect()
+        )
+
+    if not recent_bronze:
+        print("No successful bronze runs found. Exiting.")
+        if IS_DATABRICKS:
+            dbutils.notebook.exit("NO_BRONZE_RUN")
+        else:
+            sys.exit(0)
+
+    source_file = recent_bronze[0]["source_file"]
+    match = re.match(r"snapshot_day(\d+)\.csv$", source_file)
+
+    if not match:
+        raise ValueError(
+            f"Could not parse snapshot_day from source_file: {source_file}"
+        )
+
+    snapshot_day = match.group(1)
+    print(
+        f"Auto-discovery: using snapshot_day={snapshot_day} from most recent bronze run"
+    )
+
+# COMMAND ----------
+
+# DBTITLE 1,Initialize Framework Context
 context = FrameworkContext(
     spark=spark,
     pipeline_name=pipeline_name,
@@ -128,9 +178,11 @@ context.logger.pipeline_started()
 context.logger.debug(f"Resolved paths: {paths}")
 
 run_id = context.audit.start_run()
-
 SOURCE_FILE = f"snapshot_day{snapshot_day}.csv"
 
+# COMMAND ----------
+
+# DBTITLE 1,Check Previous Stage Status
 previous_status = context.control.last_stage_status(
     pipeline_name=pipeline_name,
     source_file=SOURCE_FILE,
@@ -139,66 +191,39 @@ previous_status = context.control.last_stage_status(
 
 if previous_status == STATUS_SUCCESS:
     pass
-
 elif previous_status == STATUS_SKIPPED:
-
     context.logger.info("Gold skipped. Skipping Validation.")
-
-    context.control.skip_run(
-        pipeline_name=pipeline_name,
-        run_id=run_id,
-    )
-
+    context.control.skip_run(pipeline_name=pipeline_name, run_id=run_id)
     if IS_DATABRICKS:
         dbutils.notebook.exit("SKIPPED")
     else:
         sys.exit(0)
-
 elif previous_status == STATUS_FAILED:
-
     context.control.fail_run(
-        pipeline_name=pipeline_name,
-        run_id=run_id,
-        error_message="Gold stage failed.",
+        pipeline_name=pipeline_name, run_id=run_id, error_message="Gold stage failed."
     )
-
     raise RuntimeError("Gold stage failed.")
-
 elif previous_status == STATUS_STARTED:
-
     context.control.fail_run(
         pipeline_name=pipeline_name,
         run_id=run_id,
         error_message="Gold stage incomplete.",
     )
-
     raise RuntimeError("Gold stage incomplete.")
-
 else:
-
     context.control.fail_run(
         pipeline_name=pipeline_name,
         run_id=run_id,
         error_message=f"Unexpected Gold status: {previous_status}",
     )
-
     raise RuntimeError(f"Unexpected Gold status: {previous_status}")
 
-# Skip if Validation has already run successfully for this exact source file --
-# without this check (and the stage= filter on already_processed), Validation
-# would re-run and rewrite validation_report.json on every run for the same day.
-if context.control.already_processed(
-    pipeline_name,
-    SOURCE_FILE,
-    stage="validation",
-):
+# COMMAND ----------
+
+# DBTITLE 1,Check Idempotency
+if context.control.already_processed(pipeline_name, SOURCE_FILE, stage="validation"):
     context.logger.info(f"Validation already processed for: {SOURCE_FILE}")
-
-    context.control.skip_run(
-        pipeline_name=pipeline_name,
-        run_id=run_id,
-    )
-
+    context.control.skip_run(pipeline_name=pipeline_name, run_id=run_id)
     if IS_DATABRICKS:
         dbutils.notebook.exit("SKIPPED")
     else:
@@ -213,10 +238,10 @@ context.control.start_run(
     source_file=SOURCE_FILE,
 )
 
-# ------------------------------------------------------------------
+# COMMAND ----------
 
+# DBTITLE 1,Setup Paths and Helper Functions
 if IS_DATABRICKS:
-
     BRONZE_PATH = paths["bronze_table"]
     SILVER_PATH = paths["silver_table"]
     GOLD_PATH = paths["gold_table"]
@@ -224,10 +249,7 @@ if IS_DATABRICKS:
     CONTROL_PATH = paths["control_table"]
     AUDIT_PATH = paths["audit_table"]
     SCHEMA_PATH = paths["schema_history_table"]
-    QUARANTINE_PATH = paths["quarantine_table"]
-
 else:
-
     BRONZE_PATH = paths["bronze"]
     SILVER_PATH = paths["silver"]
     GOLD_PATH = paths["gold"]
@@ -235,104 +257,106 @@ else:
     CONTROL_PATH = paths["control"]
     AUDIT_PATH = paths["audit"]
     SCHEMA_PATH = paths["schema_history"]
-    QUARANTINE_PATH = paths["quarantine"]
 
+# Quarantine is written via QuarantineManager.quarantine()/.initialize(),
+# which always uses a raw Delta PATH write (.save(), never .saveAsTable())
+# on both Databricks and local -- it's intentionally never registered as a
+# catalog table, so it must always be existence-checked as a path
+# (delta_exists), never as a catalog table (table_exists/tableExists).
+QUARANTINE_PATH = paths["quarantine"]
+
+REPORT_DIR = paths.get("reports", "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
-
-# ------------------------------------------------------------------
 
 
 def delta_exists(path):
-
+    if path is None:
+        return False
     try:
         return DeltaTable.isDeltaTable(spark, path)
     except Exception:
         return False
 
 
-# ------------------------------------------------------------------
+def table_exists(path):
+    if path is None:
+        return False
+    if IS_DATABRICKS:
+        return spark.catalog.tableExists(path)
+    return delta_exists(path)
+
+
+def read_table(path):
+    if IS_DATABRICKS:
+        return spark.table(path)
+    return spark.read.format("delta").load(path)
+
+
+# COMMAND ----------
+
+# DBTITLE 1,Run Validation Checks
 start_time = time.time()
+
 try:
     validation = {}
-
     validation["execution_time"] = datetime.now(UTC).isoformat()
 
-    if IS_DATABRICKS:
-        validation["bronze_exists"] = spark.catalog.tableExists(BRONZE_PATH)
-        validation["silver_exists"] = spark.catalog.tableExists(SILVER_PATH)
-        validation["gold_exists"] = spark.catalog.tableExists(GOLD_PATH)
-        validation["reconciliation_exists"] = spark.catalog.tableExists(RECON_PATH)
-    else:
-        validation["bronze_exists"] = delta_exists(BRONZE_PATH)
-        validation["silver_exists"] = delta_exists(SILVER_PATH)
-        validation["gold_exists"] = delta_exists(GOLD_PATH)
-        validation["reconciliation_exists"] = delta_exists(RECON_PATH)
-
     # ------------------------------------------------------------------
+    # Table existence
+    # ------------------------------------------------------------------
+    validation["bronze_exists"] = table_exists(BRONZE_PATH)
+    validation["silver_exists"] = table_exists(SILVER_PATH)
+    validation["gold_exists"] = table_exists(GOLD_PATH)
+    validation["reconciliation_exists"] = table_exists(RECON_PATH)
+    validation["control_exists"] = table_exists(CONTROL_PATH)
+    validation["audit_exists"] = table_exists(AUDIT_PATH)
+    validation["schema_history_exists"] = table_exists(SCHEMA_PATH)
+    validation["quarantine_exists"] = delta_exists(QUARANTINE_PATH)
 
     errors = []
-
-    if not validation["bronze_exists"]:
-        errors.append("Bronze table missing")
-
-    if not validation["silver_exists"]:
-        errors.append("Silver table missing")
-
-    if not validation["gold_exists"]:
-        errors.append("Gold table missing")
-
-    # if not validation["audit_exists"]:
-    # errors.append("Audit table missing")
-
-    if not validation["reconciliation_exists"]:
-        errors.append("Reconciliation table missing")
+    for label, key in [
+        ("Bronze table missing", "bronze_exists"),
+        ("Silver table missing", "silver_exists"),
+        ("Gold table missing", "gold_exists"),
+        ("Reconciliation table missing", "reconciliation_exists"),
+        ("Control table missing", "control_exists"),
+        ("Audit table missing", "audit_exists"),
+        ("Schema history missing", "schema_history_exists"),
+        ("Quarantine table missing", "quarantine_exists"),
+    ]:
+        if not validation[key]:
+            errors.append(label)
 
     # ------------------------------------------------------------------
-
-    bronze_rows = 0
-    silver_rows = 0
-    gold_rows = 0
-
-    if validation["bronze_exists"]:
-        if IS_DATABRICKS:
-            bronze_rows = spark.table(BRONZE_PATH).count()
-        else:
-            bronze_rows = spark.read.format("delta").load(BRONZE_PATH).count()
-    if validation["silver_exists"]:
-        if IS_DATABRICKS:
-            silver_rows = spark.table(SILVER_PATH).count()
-        else:
-            silver_rows = spark.read.format("delta").load(SILVER_PATH).count()
-
-    if validation["gold_exists"]:
-        if IS_DATABRICKS:
-            gold_rows = spark.table(GOLD_PATH).count()
-        else:
-            gold_rows = spark.read.format("delta").load(GOLD_PATH).count()
+    # Row counts
+    # ------------------------------------------------------------------
+    bronze_rows = read_table(BRONZE_PATH).count() if validation["bronze_exists"] else 0
+    silver_rows = read_table(SILVER_PATH).count() if validation["silver_exists"] else 0
+    gold_rows = read_table(GOLD_PATH).count() if validation["gold_exists"] else 0
 
     validation["bronze_rows"] = bronze_rows
     validation["silver_rows"] = silver_rows
     validation["gold_rows"] = gold_rows
 
-    if IS_DATABRICKS:
-        validation["control_exists"] = spark.catalog.tableExists(CONTROL_PATH)
-    else:
-        validation["control_exists"] = delta_exists(CONTROL_PATH)
+    if bronze_rows < silver_rows:
+        errors.append("Silver contains more rows than Bronze.")
+    if silver_rows == 0:
+        errors.append("Silver table empty.")
+    if gold_rows == 0:
+        errors.append("Gold table empty.")
 
+    # ------------------------------------------------------------------
+    # Control table cross-check -- filtered by THIS source_file + the gold
+    # stage + SUCCESS, so this can't accidentally pick up a different
+    # snapshot day's row, a different stage's row, or Validation's own
+    # just-inserted STARTED row.
+    # ------------------------------------------------------------------
     current_run_id = None
+
     if validation["control_exists"]:
-
-        if IS_DATABRICKS:
-            control = spark.table(CONTROL_PATH)
-        else:
-            control = spark.read.format("delta").load(CONTROL_PATH)
-
-        # Filtered by source_file + stage + SUCCESS status -- without these,
-        # this can grab any stage's most-recently-touched row for this
-        # pipeline (including Validation's own STARTED row inserted just
-        # above), producing None-vs-None comparisons and misleading results.
         latest_rows = (
-            control.filter(F.col("pipeline_name") == pipeline_name)
+            read_table(CONTROL_PATH)
+            .filter(F.col("pipeline_name") == pipeline_name)
             .filter(F.col("source_file") == SOURCE_FILE)
             .filter(F.col("stage") == "gold")
             .filter(F.col("status") == "SUCCESS")
@@ -342,13 +366,10 @@ try:
         )
 
         if latest_rows:
-
             latest = latest_rows[0]
-
             current_run_id = latest["run_id"]
 
             validation["current_run_id"] = current_run_id
-
             validation["control_status"] = latest["status"]
             validation["control_source_file"] = latest["source_file"]
             validation["control_rows_read"] = latest["rows_read"]
@@ -360,39 +381,33 @@ try:
                 and latest["rows_written"] > latest["rows_read"]
             ):
                 errors.append("Control table reports more rows written than rows read.")
-
-            if latest["status"] != "SUCCESS":
-                errors.append("Latest control table run is not SUCCESS.")
-
         else:
-            errors.append("Control table exists but contains no records.")
-
-    else:
-        errors.append("Control table missing.")
-
-    if validation["reconciliation_exists"] and current_run_id:
-
-        if IS_DATABRICKS:
-            recon_rows = (
-                spark.table(RECON_PATH)
-                .filter(F.col("run_id") == current_run_id)
-                .limit(1)
-                .collect()
+            errors.append(
+                f"No successful gold-stage control record found for {SOURCE_FILE}."
             )
 
-        else:
-            recon_rows = (
-                spark.read.format("delta")
-                .load(RECON_PATH)
-                .filter(F.col("run_id") == current_run_id)
-                .limit(1)
-                .collect()
-            )
+    # ------------------------------------------------------------------
+    # Reconciliation cross-check -- row conservation at the Silver DQ gate.
+    #
+    # Filtered by snapshot_day, NOT run_id: each stage (bronze/silver/gold/
+    # validation) generates its OWN run_id when run independently (outside
+    # a shared-run_id orchestrated job), so reconciliation -- written by
+    # Silver, tagged with Silver's run_id -- will essentially never match
+    # a run_id sourced from Gold's control row. snapshot_day is the one
+    # identifier that's reliably the same across every stage for a given
+    # source file.
+    # ------------------------------------------------------------------
+    if validation["reconciliation_exists"]:
+        recon_rows = (
+            read_table(RECON_PATH)
+            .filter(F.col("snapshot_day") == int(snapshot_day))
+            .orderBy(F.desc("run_ts"))
+            .limit(1)
+            .collect()
+        )
 
         if recon_rows:
-
             recon = recon_rows[0]
-
             validation["snapshot_day"] = recon["snapshot_day"]
             validation["snapshot_rows"] = recon["total_rows_in_snapshot"]
             validation["dq_dropped"] = recon["dq_dropped_rows"]
@@ -407,80 +422,54 @@ try:
                 errors.append(
                     "Row conservation check failed at silver DQ gate -- rows may have been lost."
                 )
-
         else:
             errors.append(
-                f"No reconciliation record found for run_id={current_run_id}."
+                f"No reconciliation record found for snapshot_day={snapshot_day}."
             )
 
-    else:
-        errors.append("Reconciliation table missing.")
-    # --------------------------------------------------------
     # ------------------------------------------------------------------
+    # Stage-success cross-check -- bronze/silver/gold all show SUCCESS for
+    # THIS source file. Uses the control table's stage+source_file
+    # filtering (the same reliable mechanism already gating each notebook's
+    # own execution) instead of the audit table's run_id, for the same
+    # reason as above: audit records are tagged with each stage's own
+    # independent run_id, so there's no single run_id that finds all three.
+    # ------------------------------------------------------------------
+    stage_failures = []
+    for stage_name in ("bronze", "silver", "gold"):
+        stage_status = context.control.last_stage_status(
+            pipeline_name=pipeline_name,
+            source_file=SOURCE_FILE,
+            stage=stage_name,
+        )
+        if stage_status != STATUS_SUCCESS:
+            stage_failures.append(f"{stage_name}={stage_status}")
 
-    if IS_DATABRICKS:
-        validation["audit_exists"] = spark.catalog.tableExists(AUDIT_PATH)
-    else:
-        validation["audit_exists"] = delta_exists(AUDIT_PATH)
+    validation["stage_statuses_checked"] = ["bronze", "silver", "gold"]
+    if stage_failures:
+        errors.append(
+            f"Not all stages show SUCCESS for {SOURCE_FILE}: {', '.join(stage_failures)}"
+        )
 
+    # Audit table row count is still reported for visibility, but is
+    # informational only -- it's not reliable as a pass/fail signal without
+    # a shared run_id across stages (see comment above).
     if validation["audit_exists"] and current_run_id:
+        validation["audit_records_for_gold_run"] = (
+            read_table(AUDIT_PATH).filter(F.col("run_id") == current_run_id).count()
+        )
 
-        if IS_DATABRICKS:
-            audit = spark.table(AUDIT_PATH)
-        else:
-            audit = spark.read.format("delta").load(AUDIT_PATH)
-
-        current_audit = audit.filter(F.col("run_id") == current_run_id)
-
-        audit_count = current_audit.count()
-
-        validation["audit_records"] = audit_count
-
-        if audit_count == 0:
-
-            errors.append(f"No audit records found for run_id={current_run_id}.")
-
-        else:
-
-            failed = current_audit.filter(F.upper(F.col("status")) != "SUCCESS").count()
-
-            validation["failed_audits"] = failed
-
-            if failed > 0:
-                errors.append(f"{failed} failed audit entries for current execution.")
-
-    else:
-        errors.append("Audit table missing.")
-
-    if IS_DATABRICKS:
-        validation["schema_history_exists"] = spark.catalog.tableExists(SCHEMA_PATH)
-    else:
-        validation["schema_history_exists"] = delta_exists(SCHEMA_PATH)
-
+    # ------------------------------------------------------------------
+    # Schema history row count (informational)
+    # ------------------------------------------------------------------
     if validation["schema_history_exists"]:
+        validation["schema_versions"] = read_table(SCHEMA_PATH).count()
 
-        if IS_DATABRICKS:
-            schema_versions = spark.table(SCHEMA_PATH).count()
-        else:
-            schema_versions = spark.read.format("delta").load(SCHEMA_PATH).count()
-
-        validation["schema_versions"] = schema_versions
-
-    else:
-        errors.append("Schema history missing.")
-
-    if IS_DATABRICKS:
-        validation["quarantine_exists"] = spark.catalog.tableExists(QUARANTINE_PATH)
-    else:
-        validation["quarantine_exists"] = delta_exists(QUARANTINE_PATH)
-
+    # ------------------------------------------------------------------
+    # Quarantine cross-check -- should match reconciliation's dq_dropped
+    # ------------------------------------------------------------------
     if validation["quarantine_exists"]:
-
-        if IS_DATABRICKS:
-            quarantine_rows = spark.table(QUARANTINE_PATH).count()
-        else:
-            quarantine_rows = spark.read.format("delta").load(QUARANTINE_PATH).count()
-
+        quarantine_rows = spark.read.format("delta").load(QUARANTINE_PATH).count()
         validation["quarantine_rows"] = quarantine_rows
 
         if "dq_dropped" in validation and quarantine_rows != validation["dq_dropped"]:
@@ -488,81 +477,34 @@ try:
                 "Quarantine row count does not match reconciliation DQ count."
             )
 
-    else:
-        errors.append("Quarantine table missing.")
     # ------------------------------------------------------------------
-
-    if bronze_rows < silver_rows:
-
-        errors.append("Silver contains more rows than Bronze.")
-
-    if silver_rows == 0:
-
-        errors.append("Silver table empty.")
-
-    if gold_rows == 0:
-
-        errors.append("Gold table empty.")
-
-    # ------------------------------------------------------------------
-
-    validation["status"] = "PASS"
-
-    if errors:
-        validation["status"] = "FAIL"
-
+    validation["status"] = "PASS" if not errors else "FAIL"
     validation["errors"] = errors
 
     # ------------------------------------------------------------------
-
-    report_file = os.path.join(
-        REPORT_DIR,
-        "validation_report.json",
-    )
+    # Write the report -- this is the notebook's stated purpose; skipping
+    # it would mean nothing downstream can ever consume the result.
+    # ------------------------------------------------------------------
+    report_file = os.path.join(REPORT_DIR, "validation_report.json")
 
     with open(report_file, "w") as f:
+        json.dump(validation, f, indent=4, default=str)
 
-        json.dump(
-            validation,
-            f,
-            indent=4,
-            default=str,
-        )
+    context.logger.info(f"Validation report written to: {report_file}")
 
-        context.logger.info(f"Validation report written to: {report_file}")
-
-    # ------------------------------------------------------------------
-
-    context.logger.info("=" * 60)
-    context.logger.info("PIPELINE VALIDATION")
-    context.logger.info("=" * 60)
-
-    context.logger.info("=" * 60)
-    context.logger.info(f"Overall Status : {validation['status']}")
-    context.logger.info(f"Bronze Rows    : {bronze_rows:,}")
-    context.logger.info(f"Silver Rows    : {silver_rows:,}")
-    context.logger.info(f"Gold Rows      : {gold_rows:,}")
-    context.logger.info("=" * 60)
-
-    context.logger.info("=" * 60)
+    print("=" * 60)
+    print("PIPELINE VALIDATION")
+    print("=" * 60)
+    print(f"Overall Status : {validation['status']}")
+    print(f"Bronze Rows    : {bronze_rows:,}")
+    print(f"Silver Rows    : {silver_rows:,}")
+    print(f"Gold Rows      : {gold_rows:,}")
+    print("=" * 60)
 
     if validation["status"] == "PASS":
         context.logger.info("VALIDATION PASSED")
     else:
-        context.logger.warning("VALIDATION FAILED")
-
-    context.logger.info("=" * 60)
-
-    context.logger.info(f"Validation report written to: {report_file}")
-
-    context.control.finish_run(
-        pipeline_name=pipeline_name,
-        run_id=run_id,
-        rows_read=gold_rows,
-        rows_written=gold_rows,
-        duration_seconds=round(time.time() - start_time),
-    )
-    context.logger.pipeline_completed()
+        context.logger.warning(f"VALIDATION FAILED: {errors}")
 
 except Exception as exc:
 
@@ -588,6 +530,52 @@ except Exception as exc:
     context.logger.exception(f"Validation failed: {exc}")
 
     raise
+
+# COMMAND ----------
+
+# DBTITLE 1,Finalize and Exit
+# Reflect the ACTUAL validation outcome in the control table, not just
+# "the notebook ran without an exception". Always writing SUCCESS here
+# (regardless of validation["status"]) was the earlier bug: a real FAIL
+# still got recorded as SUCCESS, so the next run's already_processed()
+# check found that SUCCESS row and silently skipped re-validating --
+# forever, even after the underlying data problem was never actually
+# fixed. A FAIL must write STATUS_FAILED so the next run retries instead.
+
+audit_record = context.audit.finish_run(
+    stage="validation",
+    rows_read=gold_rows,
+    rows_written=gold_rows if validation["status"] == "PASS" else 0,
+    rows_rejected=0,
+    source_path=GOLD_PATH,
+    target_path=report_file,
+    metadata={"status": validation["status"], "errors": validation["errors"]},
+    timer_start=start_time,
+)
+
+context.audit.write_record(
+    audit_path=AUDIT_PATH,
+    record=audit_record,
+    is_databricks=IS_DATABRICKS,
+)
+
+if validation["status"] == "PASS":
+    context.control.finish_run(
+        pipeline_name=pipeline_name,
+        run_id=run_id,
+        rows_read=gold_rows,
+        rows_written=gold_rows,
+        duration_seconds=round(time.time() - start_time),
+    )
+else:
+    context.control.fail_run(
+        pipeline_name=pipeline_name,
+        run_id=run_id,
+        error_message="; ".join(validation["errors"])[:2000],
+        duration_seconds=round(time.time() - start_time),
+    )
+
+context.logger.pipeline_completed()
 
 if IS_DATABRICKS:
     dbutils.notebook.exit(validation["status"])

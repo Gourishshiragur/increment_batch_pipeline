@@ -47,6 +47,7 @@
                 "gold": "gold",
                 "audit": "audit",
                 "control": "control",
+                "quarantine": "quarantine",
                 "reconciliation": "reconciliation",
                 "schema_history": "schema_history",
                 "schema_changes": "schema_changes"
@@ -77,6 +78,7 @@
                 "gold": "workspace.default.inc_batch_gold",
                 "audit": "workspace.default.inc_batch_audit",
                 "control": "workspace.default.inc_batch_control",
+                "quarantine": "workspace.default.inc_batch_quarantine",
                 "reconciliation": "workspace.default.inc_batch_reconciliation",
                 "schema_history": "workspace.default.inc_batch_schema_history",
                 "schema_changes": "workspace.default.inc_batch_schema_changes"

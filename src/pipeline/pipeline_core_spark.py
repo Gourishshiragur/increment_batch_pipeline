@@ -441,7 +441,6 @@ def gold_processing(
       - total_readings
 
     Applies:
-      - .cache() on the Silver read (avoids double scan for count + agg)
       - OPTIMIZE + ZORDER on the Gold table for fast downstream lookups
       - Overwrite mode (Gold is always a complete, current view — not additive)
 
@@ -449,9 +448,9 @@ def gold_processing(
         (gold_df, gold_row_count)
     """
     if IS_DATABRICKS:
-        silver_df = spark.table(silver_source).cache()
+        silver_df = spark.table(silver_source)
     else:
-        silver_df = spark.read.format("delta").load(silver_source).cache()
+        silver_df = spark.read.format("delta").load(silver_source)
 
     gold_df = (
         silver_df.groupBy("customer_id", "machine_id")
@@ -464,7 +463,6 @@ def gold_processing(
             F.count("reading_id").alias("total_readings"),
             F.max("_ingestion_ts").alias("last_updated_ts"),
         )
-        .cache()
     )
 
     gold_count = gold_df.count()
@@ -473,8 +471,6 @@ def gold_processing(
     # empty or misread, we must not wipe an existing good Gold table with an
     # empty result. Refuse the write and let the caller decide how to handle it.
     if gold_count == 0:
-        silver_df.unpersist()
-        gold_df.unpersist()
         raise RuntimeError(
             f"Gold aggregation produced 0 rows from silver_source={silver_source} "
             f"-- refusing to overwrite Gold with an empty result."
@@ -493,8 +489,6 @@ def gold_processing(
     """)
     else:
         print("Skipping OPTIMIZE/ZORDER in local Spark.")
-    silver_df.unpersist()
-    gold_df.unpersist()
     return gold_df, gold_count
 
 

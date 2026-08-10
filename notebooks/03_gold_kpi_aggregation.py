@@ -18,6 +18,8 @@
 # MAGIC machine with current KPIs, updated daily after this notebook runs.
 
 # COMMAND ----------
+
+# DBTITLE 1,Gold Setup
 import os
 import sys
 from pathlib import Path
@@ -98,6 +100,55 @@ else:
     shared_run_id = sys.argv[2] if len(sys.argv) > 2 else None
     shared_execution_id = sys.argv[3] if len(sys.argv) > 3 else None
 
+# ------------------------------------------------------------------
+# Auto-discovery: Find most recent successful bronze run
+# ------------------------------------------------------------------
+
+if snapshot_day == "auto":
+    import re
+    from pyspark.sql import functions as F
+    
+    control_table = paths["control_table"] if IS_DATABRICKS else paths["control"]
+    
+    try:
+        if IS_DATABRICKS:
+            recent_bronze = spark.sql(f"""
+                SELECT source_file
+                FROM {control_table}
+                WHERE pipeline_name = '{pipeline_name}'
+                  AND stage = 'bronze'
+                  AND status = 'SUCCESS'
+                ORDER BY updated_at DESC
+                LIMIT 1
+            """).collect()
+        else:
+            from delta.tables import DeltaTable
+            dt = DeltaTable.forPath(spark, control_table)
+            recent_bronze = dt.toDF().filter(
+                (F.col("pipeline_name") == pipeline_name) &
+                (F.col("stage") == "bronze") &
+                (F.col("status") == "SUCCESS")
+            ).orderBy(F.col("updated_at").desc()).limit(1).collect()
+        
+        if not recent_bronze:
+            print("No successful bronze runs found. Exiting.")
+            if IS_DATABRICKS:
+                dbutils.notebook.exit("NO_BRONZE_RUN")
+            else:
+                sys.exit(0)
+        
+        source_file = recent_bronze[0]["source_file"]
+        match = re.match(r'snapshot_day(\d+)\.csv$', source_file)
+        if match:
+            snapshot_day = match.group(1)
+            print(f"Auto-discovery: Using snapshot_day={snapshot_day} from most recent bronze run")
+        else:
+            raise ValueError(f"Could not parse snapshot_day from source_file: {source_file}")
+            
+    except Exception as e:
+        print(f"Auto-discovery failed: {e}")
+        raise
+
 SOURCE_FILE = f"snapshot_day{snapshot_day}.csv"
 
 context = FrameworkContext(
@@ -171,9 +222,7 @@ else:
 
     raise RuntimeError(f"Unexpected Silver status: {previous_status}")
 
-# Skip if Gold has already successfully processed this exact source file --
-# without this check (and the stage= filter on already_processed), Gold
-# would re-run its full aggregation + OPTIMIZE on every run for the same day.
+# Skip if Gold has already successfully processed this exact source file
 if context.control.already_processed(
     pipeline_name,
     SOURCE_FILE,
@@ -210,8 +259,8 @@ else:
     GOLD_TARGET = paths["gold"]
     AUDIT_PATH = paths["audit"]
 
-
 audit_target = AUDIT_TABLE if IS_DATABRICKS else AUDIT_PATH
+
 # COMMAND ----------
 
 context.logger.info("=" * 80)
@@ -236,6 +285,7 @@ start_time = time.time()
 
 # COMMAND ----------
 
+# DBTITLE 1,Gold processing
 try:
     if silver_count == 0:
         raise RuntimeError("Silver table contains no rows.")
@@ -296,6 +346,7 @@ except Exception as exc:
 # MAGIC ### Sample business query: top 10 machines by fault events
 
 # COMMAND ----------
+
 context.logger.info("Displaying top 10 machines by fault events.")
 top_faults = gold_df.select(
     "customer_id",
@@ -311,6 +362,7 @@ else:
     top_faults.show(10, truncate=False)
 
 # COMMAND ----------
+
 elapsed = time.time() - start_time
 
 context.logger.info("=" * 80)

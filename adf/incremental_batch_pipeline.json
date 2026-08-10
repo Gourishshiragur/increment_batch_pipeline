@@ -1,0 +1,124 @@
+{
+  "name": "incremental_batch_pipeline",
+  "properties": {
+    "description": "Orchestrates the Bronze -> Silver -> Gold -> Validation Databricks notebooks for one snapshot_day. Reference/template -- not verified against a live Azure Data Factory + Databricks environment. See adf/README.md before using.",
+    "parameters": {
+      "snapshot_day": {
+        "type": "string",
+        "defaultValue": "auto"
+      },
+      "run_id": {
+        "type": "string",
+        "defaultValue": ""
+      },
+      "execution_id": {
+        "type": "string",
+        "defaultValue": ""
+      }
+    },
+    "activities": [
+      {
+        "name": "Bronze_Ingest",
+        "type": "DatabricksNotebook",
+        "typeProperties": {
+          "notebookPath": "/Workspace/Users/<your-user>/increment_batch_pipeline/notebooks/01_bronze_ingest",
+          "baseParameters": {
+            "snapshot_day": "@pipeline().parameters.snapshot_day",
+            "run_id": "@pipeline().parameters.run_id",
+            "execution_id": "@pipeline().parameters.execution_id"
+          }
+        },
+        "linkedServiceName": {
+          "referenceName": "AzureDatabricks_LinkedService",
+          "type": "LinkedServiceReference"
+        },
+        "policy": {
+          "timeout": "0.01:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30
+        }
+      },
+      {
+        "name": "Silver_Merge_Upsert",
+        "type": "DatabricksNotebook",
+        "dependsOn": [
+          {
+            "activity": "Bronze_Ingest",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "notebookPath": "/Workspace/Users/<your-user>/increment_batch_pipeline/notebooks/02_silver_merge_upsert",
+          "baseParameters": {
+            "snapshot_day": "@pipeline().parameters.snapshot_day",
+            "run_id": "@pipeline().parameters.run_id",
+            "execution_id": "@pipeline().parameters.execution_id"
+          }
+        },
+        "linkedServiceName": {
+          "referenceName": "AzureDatabricks_LinkedService",
+          "type": "LinkedServiceReference"
+        },
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30
+        }
+      },
+      {
+        "name": "Gold_KPI_Aggregation",
+        "type": "DatabricksNotebook",
+        "dependsOn": [
+          {
+            "activity": "Silver_Merge_Upsert",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "notebookPath": "/Workspace/Users/<your-user>/increment_batch_pipeline/notebooks/03_gold_kpi_aggregation",
+          "baseParameters": {
+            "snapshot_day": "@pipeline().parameters.snapshot_day",
+            "run_id": "@pipeline().parameters.run_id",
+            "execution_id": "@pipeline().parameters.execution_id"
+          }
+        },
+        "linkedServiceName": {
+          "referenceName": "AzureDatabricks_LinkedService",
+          "type": "LinkedServiceReference"
+        },
+        "policy": {
+          "timeout": "0.01:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30
+        }
+      },
+      {
+        "name": "Validation",
+        "type": "DatabricksNotebook",
+        "dependsOn": [
+          {
+            "activity": "Gold_KPI_Aggregation",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "notebookPath": "/Workspace/Users/<your-user>/increment_batch_pipeline/notebooks/04_validation",
+          "baseParameters": {
+            "snapshot_day": "@pipeline().parameters.snapshot_day",
+            "run_id": "@pipeline().parameters.run_id",
+            "execution_id": "@pipeline().parameters.execution_id"
+          }
+        },
+        "linkedServiceName": {
+          "referenceName": "AzureDatabricks_LinkedService",
+          "type": "LinkedServiceReference"
+        },
+        "policy": {
+          "timeout": "0.01:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30
+        }
+      }
+    ]
+  }
+}
