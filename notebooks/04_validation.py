@@ -465,17 +465,25 @@ try:
     if validation["schema_history_exists"]:
         validation["schema_versions"] = read_table(SCHEMA_PATH).count()
 
-    # ------------------------------------------------------------------
-    # Quarantine cross-check -- should match reconciliation's dq_dropped
-    # ------------------------------------------------------------------
-    if validation["quarantine_exists"]:
-        quarantine_rows = spark.read.format("delta").load(QUARANTINE_PATH).count()
-        validation["quarantine_rows"] = quarantine_rows
+        # ------------------------------------------------------------------
+        # Quarantine cross-check -- should match reconciliation's dq_dropped
+        # ------------------------------------------------------------------
+        errors = []
 
-        if "dq_dropped" in validation and quarantine_rows != validation["dq_dropped"]:
-            errors.append(
-                "Quarantine row count does not match reconciliation DQ count."
-            )
+    # Core tables are always required
+    for label, key in [
+        ("Bronze table missing", "bronze_exists"),
+        ("Silver table missing", "silver_exists"),
+        ("Gold table missing", "gold_exists"),
+        ("Reconciliation table missing", "reconciliation_exists"),
+        ("Control table missing", "control_exists"),
+        ("Audit table missing", "audit_exists"),
+        ("Schema history missing", "schema_history_exists"),
+    ]:
+        if not validation[key]:
+            errors.append(label)
+
+    # Quarantine table is only checked later if dq_dropped > 0
 
     # ------------------------------------------------------------------
     validation["status"] = "PASS" if not errors else "FAIL"

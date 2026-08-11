@@ -107,9 +107,9 @@ else:
 if snapshot_day == "auto":
     import re
     from pyspark.sql import functions as F
-    
+
     control_table = paths["control_table"] if IS_DATABRICKS else paths["control"]
-    
+
     try:
         if IS_DATABRICKS:
             recent_bronze = spark.sql(f"""
@@ -123,28 +123,39 @@ if snapshot_day == "auto":
             """).collect()
         else:
             from delta.tables import DeltaTable
+
             dt = DeltaTable.forPath(spark, control_table)
-            recent_bronze = dt.toDF().filter(
-                (F.col("pipeline_name") == pipeline_name) &
-                (F.col("stage") == "bronze") &
-                (F.col("status") == "SUCCESS")
-            ).orderBy(F.col("updated_at").desc()).limit(1).collect()
-        
+            recent_bronze = (
+                dt.toDF()
+                .filter(
+                    (F.col("pipeline_name") == pipeline_name)
+                    & (F.col("stage") == "bronze")
+                    & (F.col("status") == "SUCCESS")
+                )
+                .orderBy(F.col("updated_at").desc())
+                .limit(1)
+                .collect()
+            )
+
         if not recent_bronze:
             print("No successful bronze runs found. Exiting.")
             if IS_DATABRICKS:
                 dbutils.notebook.exit("NO_BRONZE_RUN")
             else:
                 sys.exit(0)
-        
+
         source_file = recent_bronze[0]["source_file"]
-        match = re.match(r'snapshot_day(\d+)\.csv$', source_file)
+        match = re.match(r"snapshot_day(\d+)\.csv$", source_file)
         if match:
             snapshot_day = match.group(1)
-            print(f"Auto-discovery: Using snapshot_day={snapshot_day} from most recent bronze run")
+            print(
+                f"Auto-discovery: Using snapshot_day={snapshot_day} from most recent bronze run"
+            )
         else:
-            raise ValueError(f"Could not parse snapshot_day from source_file: {source_file}")
-            
+            raise ValueError(
+                f"Could not parse snapshot_day from source_file: {source_file}"
+            )
+
     except Exception as e:
         print(f"Auto-discovery failed: {e}")
         raise
@@ -294,6 +305,7 @@ try:
         spark=spark,
         silver_source=SILVER_SOURCE,
         gold_target=GOLD_TARGET,
+        snapshot_day=snapshot_day,
     )
 
     if gold_count == 0:
