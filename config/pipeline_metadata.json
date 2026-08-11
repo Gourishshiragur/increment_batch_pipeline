@@ -1,133 +1,127 @@
 {
-    "metadata_version": "1.1.0",
-    "pipeline": {
-        "name": "incremental_batch_pipeline",
-        "type": "incremental_batch",
-        "version": "1.1.0",
-        "description": "Enterprise Metadata-Driven Incremental Batch Pipeline"
-    },
-    "environment": {
-        "supported": [
-            "local",
-            "databricks"
-        ]
-    },
-    "source": {
-        "format": "csv",
-        "options": {
-            "header": true,
-            "inferSchema": true,
-            "delimiter": ","
-        }
-    },
-    "target": {
-        "format": "delta"
-    },
-    "paths": {
-        "local": {
-            "base_path": "data",
-            "folders": {
-                "landing": "landing",
-                "bronze": "bronze",
-                "silver": "silver",
-                "gold": "gold",
-                "audit": "audit",
-                "control": "control",
-                "quarantine": "quarantine",
-                "schema_history": "schema_history",
-                "schema_changes": "schema_changes",
-                "logs": "logs",
-                "reports": "reports",
-                "reconciliation": "reconciliation",
-                "validation": "reports"
-            },
-            "tables": {
-                "bronze": "bronze",
-                "silver": "silver",
-                "gold": "gold",
-                "audit": "audit",
-                "control": "control",
-                "quarantine": "quarantine",
-                "reconciliation": "reconciliation",
-                "schema_history": "schema_history",
-                "schema_changes": "schema_changes"
-            }
-        },
-        "databricks": {
-            "catalog": "workspace",
-            "schema": "default",
-            "volume": "incremental_batch",
-            "folders": {
-                "landing": "landing",
-                "bronze": "bronze",
-                "silver": "silver",
-                "gold": "gold",
-                "audit": "audit",
-                "control": "control",
-                "quarantine": "quarantine",
-                "schema_history": "schema_history",
-                "schema_changes": "schema_changes",
-                "logs": "logs",
-                "reports": "reports",
-                "reconciliation": "reconciliation",
-                "validation": "reports"
-            },
-            "tables": {
-                "bronze": "workspace.default.inc_batch_bronze",
-                "silver": "workspace.default.inc_batch_silver",
-                "gold": "workspace.default.inc_batch_gold",
-                "audit": "workspace.default.inc_batch_audit",
-                "control": "workspace.default.inc_batch_control",
-                "quarantine": "workspace.default.inc_batch_quarantine",
-                "reconciliation": "workspace.default.inc_batch_reconciliation",
-                "schema_history": "workspace.default.inc_batch_schema_history",
-                "schema_changes": "workspace.default.inc_batch_schema_changes"
-            },
-            "storage": {
-                "type": "unity_catalog_volume",
-                "version": "1.1"
-            }
-        }
-    },
-    "orchestration": {
-        "execution_order": [
-            "bronze",
-            "silver",
-            "gold",
-            "reconciliation",
-            "validation"
-        ],
-        "stages": {
-            "generate": {
-                "script": "00_generate_sample_data.py",
-                "enabled": true,
-                "requires_snapshot": false
-            },
-            "bronze": {
-                "script": "01_bronze_ingest.py",
-                "enabled": true,
-                "requires_snapshot": true
-            },
-            "silver": {
-                "script": "02_silver_merge_upsert.py",
-                "enabled": true,
-                "requires_snapshot": true
-            },
-            "gold": {
-                "script": "03_gold_kpi_aggregation.py",
-                "enabled": true,
-                "requires_snapshot": false
-            },
-            "reconciliation": {
-                "script": "03_reconciliation.py",
-                "enabled": true,
-                "requires_snapshot": false
-            },
-            "validation": {
-                "script": "04_validation.py",
-                "enabled": true,
-                "requires_snapshot": false
-            }
-        }
+  "metadata_version": "1.1.0",
+  "pipeline": {
+    "name": "incremental_batch_pipeline",
+    "type": "incremental_batch",
+    "version": "1.1.0",
+    "description": "Enterprise Metadata-Driven Incremental Batch Pipeline"
+  },
+  "environment": {
+    "supported": [
+      "local",
+      "databricks"
+    ]
+  },
+  "source": {
+    "format": "csv",
+    "options": {
+      "header": true,
+      "inferSchema": true,
+      "delimiter": ","
     }
+  },
+  "target": {
+    "format": "delta"
+  },
+  "paths": {
+    "local": {
+      "base_path": "data",
+      "folders": {
+        "landing": "landing",
+        "bronze": "bronze",
+        "silver": "silver",
+        "gold": "gold",
+        "audit": "audit",
+        "control": "control",
+        "quarantine": "quarantine",
+        "schema_history": "schema_history",
+        "schema_changes": "schema_changes",
+        "logs": "logs",
+        "reports": "reports",
+        "reconciliation": "reconciliation",
+        "validation": "reports"
+      },
+      "tables": {
+        "bronze": "bronze",
+        "silver": "silver",
+        "gold": "gold",
+        "audit": "audit",
+        "control": "control",
+        "quarantine": "quarantine",
+        "reconciliation": "reconciliation",
+        "schema_history": "schema_history",
+        "schema_changes": "schema_changes"
+      }
+    },
+    "databricks": {
+      "catalog": "workspace",
+      "schema": "default",
+      "volume": "incremental_batch",
+      "folders": {
+        "landing": "landing",
+        "bronze": "bronze",
+        "silver": "silver",
+        "gold": "gold",
+        "audit": "audit",
+        "control": "control",
+        "quarantine": "quarantine",
+        "schema_history": "schema_history",
+        "schema_changes": "schema_changes",
+        "logs": "logs",
+        "reports": "reports",
+        "reconciliation": "reconciliation",
+        "validation": "reports"
+      },
+      "tables": {
+        "bronze": "workspace.default.inc_batch_bronze",
+        "silver": "workspace.default.inc_batch_silver",
+        "gold": "workspace.default.inc_batch_gold",
+        "audit": "workspace.default.inc_batch_audit",
+        "control": "workspace.default.inc_batch_control",
+        "quarantine": "workspace.default.inc_batch_quarantine",
+        "reconciliation": "workspace.default.inc_batch_reconciliation",
+        "schema_history": "workspace.default.inc_batch_schema_history",
+        "schema_changes": "workspace.default.inc_batch_schema_changes"
+      },
+      "storage": {
+        "type": "unity_catalog_volume",
+        "version": "1.1"
+      }
+    }
+  },
+  "orchestration": {
+    "execution_order": [
+      "bronze",
+      "silver",
+      "gold",
+      "validation"
+    ],
+    "stages": {
+      "generate": {
+        "script": "data/generate_snapshots.py",
+        "enabled": true,
+        "requires_snapshot": false
+      },
+      "bronze": {
+        "script": "notebooks/01_bronze_ingest.py",
+        "enabled": true,
+        "requires_snapshot": true
+      },
+      "silver": {
+        "script": "notebooks/02_silver_merge_upsert.py",
+        "enabled": true,
+        "requires_snapshot": true
+      },
+      "gold": {
+        "script": "notebooks/03_gold_kpi_aggregation.py",
+        "enabled": true,
+        "requires_snapshot": true
+      },
+      "validation": {
+        "script": "notebooks/04_validation.py",
+        "enabled": true,
+        "requires_snapshot": true
+      }
+    }
+  }
 }

@@ -245,6 +245,8 @@ def silver_data_quality_gate(
     Returns:
         (clean_df, rows_dropped)
     """
+    # Cache bronze_df since it's accessed multiple times (count + filter operations)
+    bronze_df = bronze_df.cache()
     before_count = bronze_df.count()
 
     invalid_condition = (
@@ -298,6 +300,10 @@ def silver_data_quality_gate(
         )
 
     rows_dropped = invalid_count + duplicate_count
+
+    # Unpersist cached bronze_df to free memory
+    bronze_df.unpersist()
+
     return clean_df, rows_dropped
 
 
@@ -346,8 +352,11 @@ def silver_change_detection(
             .alias("prior")
         )
 
-    # Left join: rows with no prior match → NEW; rows with a match → compare
-    joined = silver_candidate.alias("cur").join(prior_df, on="reading_id", how="left")
+    # Left join with broadcast: rows with no prior match → NEW; rows with a match → compare
+    # Broadcast optimization: if prior_df is small enough, broadcasting avoids shuffle
+    joined = silver_candidate.alias("cur").join(
+        F.broadcast(prior_df), on="reading_id", how="left"
+    )
 
     # Build change expression: any tracked field differs between cur and prior.
     # eqNullSafe treats null==null as equal and null-vs-value as a real
@@ -431,6 +440,7 @@ def gold_processing(
     spark: SparkSession,
     silver_source: str,
     gold_target: str,
+    snapshot_day: int,
 ) -> Tuple[DataFrame, int]:
     """
     Read the Silver current-state table and aggregate to Gold KPIs
@@ -439,10 +449,19 @@ def gold_processing(
       - avg_payload_t
       - fault_events     (count of readings where fault_code != 'NONE')
       - total_readings
+      - _snapshot_day    (partition column for historical tracking)
 
     Applies:
       - OPTIMIZE + ZORDER on the Gold table for fast downstream lookups
       - Overwrite mode (Gold is always a complete, current view — not additive)
+      - Partition pruning: Bronze table uses _snapshot_day partitioning,
+        enabling efficient filtering when reading historical data
+
+    Args:
+        spark: SparkSession
+        silver_source: Silver table or path
+        gold_target: Gold table or path
+        snapshot_day: Snapshot day identifier for partitioning
 
     Returns:
         (gold_df, gold_row_count)
@@ -452,14 +471,18 @@ def gold_processing(
     else:
         silver_df = spark.read.format("delta").load(silver_source)
 
-    gold_df = silver_df.groupBy("customer_id", "machine_id").agg(
-        F.avg("fuel_level").alias("avg_fuel_level"),
-        F.avg("payload_weight_t").alias("avg_payload_t"),
-        F.sum(F.when(F.col("fault_code") != "NONE", 1).otherwise(0)).alias(
-            "fault_events"
-        ),
-        F.count("reading_id").alias("total_readings"),
-        F.max("_ingestion_ts").alias("last_updated_ts"),
+    gold_df = (
+        silver_df.groupBy("customer_id", "machine_id")
+        .agg(
+            F.avg("fuel_level").alias("avg_fuel_level"),
+            F.avg("payload_weight_t").alias("avg_payload_t"),
+            F.sum(F.when(F.col("fault_code") != "NONE", 1).otherwise(0)).alias(
+                "fault_events"
+            ),
+            F.count("reading_id").alias("total_readings"),
+            F.max("_ingestion_ts").alias("last_updated_ts"),
+        )
+        .withColumn("_snapshot_day", F.lit(snapshot_day))
     )
 
     gold_count = gold_df.count()

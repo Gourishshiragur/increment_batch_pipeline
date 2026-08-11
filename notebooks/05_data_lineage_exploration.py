@@ -55,31 +55,51 @@ print("=" * 80)
 print("\n1. CONTROL TABLE - Processing History")
 print("-" * 80)
 spark.table(control_table).select(
-    "stage", "source_file", "status", "rows_written", "duration_seconds",
-    "start_time", "end_time",
+    "stage",
+    "source_file",
+    "status",
+    "rows_written",
+    "duration_seconds",
+    "start_time",
+    "end_time",
 ).orderBy(F.desc("start_time")).show(20, truncate=False)
 
 print("\n2. BRONZE TABLE - Sample Data")
 print("-" * 80)
 spark.table(bronze_table).select(
-    "_snapshot_day", "customer_id", "machine_id", "event_ts",
-    "fuel_level", "payload_weight_t", "fault_code", "_ingestion_ts",
+    "_snapshot_day",
+    "customer_id",
+    "machine_id",
+    "event_ts",
+    "fuel_level",
+    "payload_weight_t",
+    "fault_code",
+    "_ingestion_ts",
 ).orderBy(F.desc("_ingestion_ts")).show(10, truncate=False)
 
 print("\n3. SILVER TABLE - Sample Data")
 print("-" * 80)
 spark.table(silver_table).select(
-    "_snapshot_day", "customer_id", "machine_id", "event_ts",
-    "fuel_level", "payload_weight_t", "fault_code", "_processing_ts",
-).orderBy(F.desc("_processing_ts")).show(10, truncate=False)
+    "_snapshot_day",
+    "customer_id",
+    "machine_id",
+    "event_ts",
+    "fuel_level",
+    "payload_weight_t",
+    "fault_code",
+    "_ingestion_ts",
+).orderBy(F.desc("_ingestion_ts")).show(10, truncate=False)
 
 print("\n4. GOLD TABLE - Sample KPIs")
 print("-" * 80)
 spark.table(gold_table).select(
-    "customer_id", "machine_id",
+    "customer_id",
+    "machine_id",
     F.round("avg_fuel_level", 2).alias("avg_fuel"),
     F.round("avg_payload_t", 2).alias("avg_payload"),
-    "fault_events", "total_readings", "last_updated_ts",
+    "fault_events",
+    "total_readings",
+    "last_updated_ts",
 ).orderBy(F.desc("last_updated_ts")).show(10, truncate=False)
 
 print("\n" + "=" * 80)
@@ -147,15 +167,22 @@ silver_df.groupBy("_snapshot_day").agg(
 ).withColumn(
     "uniqueness_pct",
     F.round(100.0 * F.col("unique_readings") / F.col("total_records"), 2),
-).orderBy("_snapshot_day").show(truncate=False)
+).orderBy(
+    "_snapshot_day"
+).show(
+    truncate=False
+)
 
 print("\n4. PROCESSING TIMELINE")
 print("-" * 80)
 spark.table(control_table).filter(F.col("status") == "SUCCESS").select(
-    "stage", "source_file", "status",
+    "stage",
+    "source_file",
+    "status",
     F.col("start_time").cast("string").alias("start_time"),
     F.col("end_time").cast("string").alias("end_time"),
-    "duration_seconds", "rows_written",
+    "duration_seconds",
+    "rows_written",
 ).orderBy(F.desc("start_time")).show(20, truncate=False)
 
 print("\n" + "=" * 80)
@@ -169,7 +196,14 @@ print("=" * 80)
 print("UNITY CATALOG TABLE INFORMATION")
 print("=" * 80)
 
-tables = [bronze_table, silver_table, gold_table, control_table, audit_table, recon_table]
+tables = [
+    bronze_table,
+    silver_table,
+    gold_table,
+    control_table,
+    audit_table,
+    recon_table,
+]
 
 print("\n1. TABLE METADATA")
 print("-" * 80)
@@ -190,21 +224,18 @@ for full_name in tables:
 
 print("\n\n2. HOW TO ACCESS UNITY CATALOG LINEAGE")
 print("-" * 80)
-print(
-    """
+print("""
 To view data lineage in Unity Catalog:
 
 1. Open Catalog Explorer -> Click 'Catalog' in the left sidebar
 2. Navigate to your catalog/schema, click on any pipeline table
 3. Go to the 'Lineage' tab to see upstream sources, downstream consumers,
    and jobs that read/write the table.
-"""
-)
+""")
 
 print("\n3. PIPELINE FLOW")
 print("-" * 80)
-print(
-    """
+print("""
 CSV Files (landing) -> Bronze (raw ingest, idempotent)
                      -> Silver (dedup, DQ, incremental upsert)
                      -> Gold (business KPIs)
@@ -214,8 +245,7 @@ Control tables (metadata):
   - control          Tracks processing status per stage/source_file
   - audit            Execution history
   - reconciliation   Row-count / row-conservation validation
-"""
-)
+""")
 
 print("\n" + "=" * 80)
 print("✅ Catalog Explorer has the visual lineage view for these tables.")

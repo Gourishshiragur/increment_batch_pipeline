@@ -35,9 +35,9 @@ MACHINES_PER_CUSTOMER = (200, 240)  # avg ~220/customer -> ~2M rows/day
 READINGS_PER_MACHINE_PER_DAY = 360
 N_DAYS = 5
 
-CORRECT_PCT = 0.04
-AGE_OUT_PCT = 0.03
-NEW_ARRIVAL_PCT = 0.03  # balanced against AGE_OUT_PCT -- keeps size flat
+CORRECT_PCT = 0.35  # 35% corrected (increased for 40-50% reduction target)
+AGE_OUT_PCT = 0.10  # 10% aged out
+NEW_ARRIVAL_PCT = 0.10  # 10% new arrivals (balanced against AGE_OUT_PCT)
 
 paths = get_paths()
 # Uses the SAME "landing" key every notebook already reads from -- "landing"
