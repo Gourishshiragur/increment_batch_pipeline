@@ -8,11 +8,9 @@ Generate Snapshots
         ↓
 Bronze
         ↓
-Silver
+Silver (includes reconciliation record write -- not a separate stage)
         ↓
 Gold
-        ↓
-Reconciliation
         ↓
 Validation
 
@@ -20,11 +18,9 @@ Without --generate
 
 Bronze
  ↓
-Silver
+Silver (includes reconciliation record write -- not a separate stage)
  ↓
 Gold
- ↓
-Reconciliation
  ↓
 Validation
 """
@@ -66,6 +62,7 @@ def run_script(
     *args: str,
     run_id: str,
     execution_id: str,
+    pass_ids: bool = True,
 ):
 
     script_path = ROOT / script
@@ -76,13 +73,19 @@ def run_script(
 
     start = time.time()
 
+    # data/generate_snapshots.py uses argparse (a --day flag), not the
+    # positional day/run_id/execution_id convention every pipeline stage
+    # script uses -- and it has no concept of run_id/execution_id at all
+    # (it's a data-generation utility, not an audited pipeline stage), so
+    # pass_ids=False skips appending them for that one.
+    extra_args = [run_id, execution_id] if pass_ids else []
+
     result = subprocess.run(
         [
             sys.executable,
             str(script_path),
             *args,
-            run_id,
-            execution_id,
+            *extra_args,
         ],
         cwd=ROOT,
         text=True,
@@ -256,6 +259,7 @@ def main():
                     script,
                     run_id=shared_run_id,
                     execution_id=shared_execution_id,
+                    pass_ids=(stage_name != "generate"),
                 )
 
                 pipeline_summary["stages"][stage_name] = {

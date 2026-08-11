@@ -1,8 +1,17 @@
 """
-Core pipeline logic, extracted so it's importable by both the validation
-harness (validation/run_pipeline_validation.py) and the unit test suite
-(tests/test_pipeline_logic.py). This is the single source of truth for the
-Bronze->Silver change-detection->merge logic being tested.
+Core pipeline logic, extracted so it's importable by both the local unit
+test suite (tests/test_pipeline_logic.py) and the local benchmark harness
+(benchmarks/run_incremental_benchmark.py). This is a plain-pandas mirror
+of the real Delta/Spark logic in src/pipeline/pipeline_core_spark.py --
+Spark-free specifically so tests run in milliseconds without needing a
+JVM or cluster. Behavior here is expected to match pipeline_core_spark.py
+exactly.
+
+TRACKED_FIELDS must match src/pipeline/pipeline_core_spark.py's
+TRACKED_FIELDS exactly -- deliberately excludes event_ts/gps_lat/gps_lon,
+which drift on nearly every reading regardless of whether anything
+business-meaningful changed. Including them once inflated changed_rows and
+understated the real reprocessing-reduction metric.
 """
 
 import pandas as pd
@@ -13,14 +22,27 @@ TRACKED_FIELDS = ["fuel_level", "payload_weight_t", "fault_code"]
 
 def silver_data_quality_gate(df: pd.DataFrame):
     """Drops rows with null business keys or out-of-range sensor values,
-    then dedupes on reading_id keeping the last occurrence."""
+    then dedupes on reading_id.
+
+    Mirrors pipeline_core_spark.py's silver_data_quality_gate(): when an
+    `_ingestion_ts` column is present, the row with the LATEST ingestion
+    timestamp per reading_id is kept (matching Spark's explicit
+    Window.partitionBy("reading_id").orderBy(F.col("_ingestion_ts").desc())
+    dedup, which handles re-transmits of a corrected reading). If
+    `_ingestion_ts` isn't present (e.g. hand-built test fixtures that don't
+    care about ingestion timing), falls back to keeping the last row in
+    DataFrame order, same as before.
+    """
     before = len(df)
     if before == 0:
         return df.copy(), 0
     out = df.dropna(subset=["customer_id", "machine_id", "reading_id"])
     out = out[out["fuel_level"].between(0, 100)]
     out = out[out["payload_weight_t"].between(0, 60)]
-    dropped_by_gate = before - len(out)
+
+    if "_ingestion_ts" in out.columns:
+        out = out.sort_values("_ingestion_ts", ascending=True)
+
     out = out.drop_duplicates(subset=["reading_id"], keep="last")
     total_dropped = before - len(out)
     return out.reset_index(drop=True), total_dropped

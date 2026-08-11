@@ -452,17 +452,14 @@ def gold_processing(
     else:
         silver_df = spark.read.format("delta").load(silver_source)
 
-    gold_df = (
-        silver_df.groupBy("customer_id", "machine_id")
-        .agg(
-            F.avg("fuel_level").alias("avg_fuel_level"),
-            F.avg("payload_weight_t").alias("avg_payload_t"),
-            F.sum(F.when(F.col("fault_code") != "NONE", 1).otherwise(0)).alias(
-                "fault_events"
-            ),
-            F.count("reading_id").alias("total_readings"),
-            F.max("_ingestion_ts").alias("last_updated_ts"),
-        )
+    gold_df = silver_df.groupBy("customer_id", "machine_id").agg(
+        F.avg("fuel_level").alias("avg_fuel_level"),
+        F.avg("payload_weight_t").alias("avg_payload_t"),
+        F.sum(F.when(F.col("fault_code") != "NONE", 1).otherwise(0)).alias(
+            "fault_events"
+        ),
+        F.count("reading_id").alias("total_readings"),
+        F.max("_ingestion_ts").alias("last_updated_ts"),
     )
 
     gold_count = gold_df.count()

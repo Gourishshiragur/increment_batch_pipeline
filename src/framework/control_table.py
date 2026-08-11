@@ -49,6 +49,7 @@ class ControlTable:
         self.control_path = control_path
         self.control_table = control_table
         self.is_databricks = is_databricks
+
     def start_run(
         self,
         pipeline_name: str,

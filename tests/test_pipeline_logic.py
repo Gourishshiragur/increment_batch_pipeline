@@ -1,10 +1,11 @@
 """
 Unit tests for the Incremental Batch pipeline logic.
-Run with: pytest test_pipeline_logic.py -v
+Run with: pytest tests/test_pipeline_logic.py -v
 
-These import the actual functions used in validation/run_pipeline_validation.py
-(refactored into a small importable module) and assert on hand-crafted inputs
-with known expected outputs -- not on the generated dataset, so results are
+These import the actual functions used by src/pipeline/pipeline_core_pandas.py
+(the local pandas mirror of the real Delta/Spark logic in
+pipeline_core_spark.py) and assert on hand-crafted inputs with known
+expected outputs -- not on the generated dataset, so results are
 deterministic and don't depend on random seeds.
 """
 
@@ -105,6 +106,42 @@ def test_dq_gate_dedupes_exact_duplicate_reading_id():
     )
     clean, dropped = silver_data_quality_gate(df)
     assert len(clean) == 1  # dedup keeps last
+
+
+def test_dq_gate_dedupes_by_latest_ingestion_ts_not_row_order():
+    # Mirrors pipeline_core_spark.py's real dedup rule: keep the row with
+    # the LATEST _ingestion_ts, regardless of which row appears first/last
+    # in the DataFrame. The earlier version of this fix's test coverage
+    # never included _ingestion_ts at all and only passed by coincidence
+    # of row order matching what "latest" would have been -- this test
+    # deliberately puts the correct (later-timestamp) row FIRST, so it
+    # can only pass if the dedup genuinely sorts by timestamp.
+    df = make_df(
+        [
+            {
+                "reading_id": 1,
+                "customer_id": "C1",
+                "machine_id": "M1",
+                "fuel_level": 55.0,  # the CORRECTED value, ingested later
+                "payload_weight_t": 10.0,
+                "fault_code": "NONE",
+                "_ingestion_ts": "2026-01-02T00:00:00",
+            },
+            {
+                "reading_id": 1,
+                "customer_id": "C1",
+                "machine_id": "M1",
+                "fuel_level": 50.0,  # the ORIGINAL value, ingested earlier
+                "payload_weight_t": 10.0,
+                "fault_code": "NONE",
+                "_ingestion_ts": "2026-01-01T00:00:00",
+            },
+        ]
+    )
+    clean, dropped = silver_data_quality_gate(df)
+    assert len(clean) == 1
+    assert dropped == 1
+    assert clean.iloc[0]["fuel_level"] == 55.0  # the LATER-ingested row won
 
 
 def test_change_detection_first_run_all_new():
