@@ -1,6 +1,6 @@
 pyspark==3.5.1
 delta-spark==3.2.0
-pandas>=2.2.0,<3.0.0
+pandas>=3.0.5,<4.0.0
 numpy>=1.26.0,<3.0.0
 pyarrow>=15.0.0
 pytest>=8.2.0
