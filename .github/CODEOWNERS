@@ -1,0 +1,22 @@
+# CODEOWNERS -- automatically requests review from the listed owner(s)
+# whenever a PR touches a matching path. In a real team repo this maps to
+# groups (e.g. @org/data-platform-team); as a solo portfolio repo it's set
+# to the repo owner, but it's here to show the pattern and so it's a
+# one-line change to hand ownership of a path to a teammate later.
+
+# Default owner for everything not matched below
+*                           @Gourishshiragur
+
+# Pipeline core logic and merge/upsert business rules deserve the most
+# scrutiny -- correctness bugs here are silent-data-corruption risk, not
+# just a failed test.
+/src/pipeline/              @Gourishshiragur
+
+# CI/CD changes should get a second look before merging, since a bad
+# workflow change can silently stop tests from running rather than
+# failing loudly.
+/.github/workflows/         @Gourishshiragur
+
+# ADF reference definitions -- see adf/README.md before treating anything
+# here as a live deployment path.
+/adf/                       @Gourishshiragur
