@@ -306,8 +306,9 @@ class SchemaHistory:
                     .filter(col("pipeline_name") == pipeline_name)
                     .filter(col("stage") == stage)
                 )
-
-            if history_df.rdd.isEmpty():
+            # After (the fix)
+            # Serverless-compatible empty check (enterprise pattern)
+            if history_df.limit(1).count() == 0:
                 return 1
 
             latest_version = history_df.agg({"version": "max"}).first()[0]

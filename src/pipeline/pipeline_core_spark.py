@@ -499,7 +499,9 @@ def gold_processing(
         )
 
     if IS_DATABRICKS:
-        gold_df.write.mode("overwrite").saveAsTable(gold_target)
+        gold_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(
+            gold_target
+        )
     else:
         gold_df.write.format("delta").mode("overwrite").save(gold_target)
 
