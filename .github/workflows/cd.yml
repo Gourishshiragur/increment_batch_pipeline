@@ -1,0 +1,66 @@
+name: CD
+
+# Enterprise deployment shape: three GitHub Environments (dev / staging /
+# prod), each with its own secrets and, if you configure it in repo
+# Settings -> Environments, its own required reviewers / wait timer. That
+# reviewer gate is what makes this "prod requires a human to click approve"
+# rather than "prod deploys the moment CI passes."
+#
+# STATUS: this workflow is a reference implementation, same as the deploy
+# job it replaces in ci.yml. It has NOT been run against a live Databricks
+# workspace. Before relying on it:
+#   1. Create three GitHub Environments: dev, staging, prod
+#      (Settings -> Environments -> New environment)
+#   2. Per environment, add secrets:
+#        DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_USER_EMAIL
+#   3. On the prod environment, add required reviewers so a human must
+#      approve before that job runs.
+#   4. Verify `databricks workspace import-dir` and the target path match
+#      your actual workspace layout.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: "Environment to deploy to"
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+        default: dev
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy notebooks to Databricks (${{ inputs.target_environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_environment }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Deploy notebooks
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          databricks workspace import-dir \
+            notebooks \
+            /Workspace/Users/${{ secrets.DATABRICKS_USER_EMAIL }}/increment_batch_pipeline/notebooks \
+            --overwrite
+
+      - name: Record deployment
+        run: |
+          echo "Deployed to ${{ inputs.target_environment }} by ${{ github.actor }} at $(date -u)" \
+            >> deployment_log.txt
+
+      - name: Upload deployment record
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-record-${{ inputs.target_environment }}-${{ github.run_id }}
+          path: deployment_log.txt

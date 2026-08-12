@@ -1,0 +1,30 @@
+{
+  "name": "daily_snapshot_tumbling_trigger",
+  "properties": {
+    "description": "Reference/template -- not verified against a live Data Factory. Fires the incremental_batch_pipeline once per day, passing the window's date as snapshot_day. See adf/README.md: this fills the 'no trigger configured' gap noted there, but still requires an actual Data Factory instance and Azure Databricks linked service to run for real.",
+    "type": "TumblingWindowTrigger",
+    "typeProperties": {
+      "frequency": "Day",
+      "interval": 1,
+      "startTime": "2026-01-01T00:00:00Z",
+      "delay": "00:15:00",
+      "maxConcurrency": 1,
+      "retryPolicy": {
+        "count": 2,
+        "intervalInSeconds": 900
+      }
+    },
+    "pipeline": {
+      "pipelineReference": {
+        "referenceName": "incremental_batch_pipeline",
+        "type": "PipelineReference"
+      },
+      "parameters": {
+        "snapshot_day": "@formatDateTime(trigger().outputs.windowStartTime, 'yyyy-MM-dd')",
+        "run_id": "@trigger().scheduledTime",
+        "execution_id": "@guid()"
+      }
+    },
+    "runtimeState": "Stopped"
+  }
+}

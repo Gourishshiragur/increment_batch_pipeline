@@ -246,7 +246,8 @@ def silver_data_quality_gate(
         (clean_df, rows_dropped)
     """
     # Cache bronze_df since it's accessed multiple times (count + filter operations)
-    bronze_df = bronze_df.cache()
+    # NOTE: .cache() disabled for serverless compute compatibility
+    # bronze_df = bronze_df.cache()
     before_count = bronze_df.count()
 
     invalid_condition = (
@@ -302,7 +303,8 @@ def silver_data_quality_gate(
     rows_dropped = invalid_count + duplicate_count
 
     # Unpersist cached bronze_df to free memory
-    bronze_df.unpersist()
+    # NOTE: .unpersist() disabled for serverless compute compatibility
+    # bronze_df.unpersist()
 
     return clean_df, rows_dropped
 

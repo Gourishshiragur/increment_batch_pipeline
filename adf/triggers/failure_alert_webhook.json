@@ -1,0 +1,33 @@
+{
+  "name": "pipeline_failure_alert",
+  "properties": {
+    "description": "Reference/template -- not verified against a live Data Factory or a real webhook endpoint. Meant to be wired as a child pipeline invoked via an ExecutePipeline activity with dependencyConditions: ['Failed'] on each stage of incremental_batch_pipeline, OR via that pipeline's own 'On failure' activity path in ADF Studio. Posts a JSON payload to a webhook (Teams/Slack incoming webhook, or a Logic App) -- see adf/README.md.",
+    "activities": [
+      {
+        "name": "Post_Failure_To_Webhook",
+        "type": "WebActivity",
+        "typeProperties": {
+          "url": "@pipeline().parameters.alert_webhook_url",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "pipeline": "incremental_batch_pipeline",
+            "run_id": "@pipeline().parameters.failed_run_id",
+            "failed_activity": "@pipeline().parameters.failed_activity_name",
+            "error_message": "@pipeline().parameters.error_message",
+            "triggered_by": "@pipeline().parameters.trigger_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "alert_webhook_url": { "type": "string", "defaultValue": "" },
+      "failed_run_id": { "type": "string", "defaultValue": "" },
+      "failed_activity_name": { "type": "string", "defaultValue": "" },
+      "error_message": { "type": "string", "defaultValue": "" },
+      "trigger_name": { "type": "string", "defaultValue": "" }
+    }
+  }
+}

@@ -1,12 +1,12 @@
 name: CI
 
-# Runs entirely on GitHub's free-tier hosted runners (ubuntu-latest) --
-# no paid minutes, no self-hosted runner, no Databricks compute needed for
-# this workflow. It validates the local pandas-mirror pipeline logic
-# (src/pipeline/pipeline_core_pandas.py + tests/) on every push and PR.
-# It does NOT deploy to Databricks -- see the "deploy" job below, which is
-# separate, manually-triggered, and requires secrets that don't exist
-# until you add them (see comments on that job).
+# Enterprise-shape CI: independent jobs for test, lint/format, and security
+# scanning run in parallel on GitHub's free-tier hosted runners. A final
+# `ci-gate` job aggregates their results so branch protection only needs to
+# require ONE check ("ci-gate"), not track every job name individually.
+#
+# This still runs entirely on ubuntu-latest -- no paid minutes, no
+# self-hosted runner, no live Databricks/Azure connection required.
 
 on:
   push:
@@ -15,9 +15,50 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test (pandas mirror, no Spark needed)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run unit tests with coverage
+        run: pytest tests/ -v --cov=src --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: coverage.xml
+          retention-days: 14
+
+  lint:
+    name: Lint & format
     runs-on: ubuntu-latest
 
     steps:
@@ -28,15 +69,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest black flake8
-
-      - name: Run unit tests
-        run: pytest tests/ -v
+          pip install black flake8
 
       - name: Check formatting (black) -- blocking
         run: black --check --line-length 88 src/ utils/ tests/
@@ -44,54 +83,54 @@ jobs:
       - name: Lint (flake8) -- informational only, does not fail the build
         # A few findings here are intentional patterns (re-export imports in
         # __init__.py files show as "unused" to flake8 but aren't) rather
-        # than real problems, and notebooks/ is deliberately excluded from
-        # linting entirely -- Databricks notebooks reference injected
-        # globals (dbutils, spark, display) that don't exist outside a
-        # running notebook, which flake8 has no way to know about and would
-        # otherwise flag as undefined-name errors on every notebook.
+        # than real problems, and notebooks/ is deliberately excluded --
+        # Databricks notebooks reference injected globals (dbutils, spark,
+        # display) that don't exist outside a running notebook.
         continue-on-error: true
         run: flake8 --max-line-length=88 --extend-ignore=E203,W503 src/ utils/ tests/
 
-  # ---------------------------------------------------------------------
-  # Deploy job -- OFF by default (workflow_dispatch only, not on every push).
-  #
-  # This pushes notebooks/config to your Databricks workspace via the
-  # Databricks CLI. To actually use it:
-  #   1. In Databricks: User Settings -> Developer -> Access tokens ->
-  #      generate a personal access token.
-  #   2. In this GitHub repo: Settings -> Secrets and variables -> Actions,
-  #      add three repository secrets:
-  #        DATABRICKS_HOST        = https://<your-workspace>.cloud.databricks.com
-  #        DATABRICKS_TOKEN       = the PAT you generated
-  #        DATABRICKS_USER_EMAIL  = the workspace user email whose /Workspace/Users/
-  #                                  folder the notebooks should deploy into
-  #   3. Trigger manually from the Actions tab ("Run workflow"), or remove
-  #      the `if:` condition below to run it after every successful push
-  #      to main.
-  #
-  # NOTE: this has not been run against a live workspace as part of this
-  # change -- verify the `databricks workspace import-dir` command and
-  # target path match your actual workspace layout before relying on it.
-  # ---------------------------------------------------------------------
-  deploy:
-    name: Deploy notebooks to Databricks
-    needs: test
+  security:
+    name: Security scan
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
 
-      - name: Install Databricks CLI
-        uses: databricks/setup-cli@main
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
 
-      - name: Deploy notebooks
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      - name: Install scanners
+        run: pip install --upgrade pip pip-audit bandit
+
+      - name: Dependency vulnerability audit (pip-audit)
+        # Reports known CVEs in requirements.txt. Informational -- a fresh
+        # portfolio repo may briefly lag a CVE disclosure; treat this as a
+        # signal to review, not an automatic hard fail, until you've set a
+        # deliberate policy on acceptable severity thresholds.
+        continue-on-error: true
+        run: pip-audit -r requirements.txt
+
+      - name: Static security scan (bandit)
+        # Scans src/ and utils/ for common insecure-code patterns (e.g.
+        # hardcoded credentials, unsafe deserialization). notebooks/ is
+        # excluded for the same reason it's excluded from flake8.
+        continue-on-error: true
+        run: bandit -r src/ utils/ -ll
+
+  ci-gate:
+    name: CI gate (required check)
+    runs-on: ubuntu-latest
+    needs: [test, lint, security]
+    if: always()
+    steps:
+      - name: Fail if any required job failed
         run: |
-          databricks workspace import-dir \
-            notebooks \
-            /Workspace/Users/${{ secrets.DATABRICKS_USER_EMAIL }}/increment_batch_pipeline/notebooks \
-            --overwrite
+          if [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.lint.result }}" != "success" ]; then
+            echo "One or more required jobs failed."
+            exit 1
+          fi
+          echo "All required checks passed."
