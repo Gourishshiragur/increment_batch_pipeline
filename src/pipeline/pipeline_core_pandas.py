@@ -64,7 +64,7 @@ def silver_change_detection(df: pd.DataFrame, prior_silver_df: pd.DataFrame = No
     is_new = merged["_merge"] == "left_only"
     field_changed = pd.Series(False, index=merged.index)
     for f in TRACKED_FIELDS:
-        field_changed |= (merged[f] == merged[f"_prior_{f}"]) & ~is_new
+        field_changed |= (merged[f] != merged[f"_prior_{f}"]) & ~is_new
 
     change_type = np.select(
         [is_new, field_changed], ["NEW", "CHANGED"], default="UNCHANGED"
